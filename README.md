@@ -46,7 +46,8 @@
 ├── Builtins
 │   ├── All Builtins
 │   ├── Builtin Docs
-│   └── Test / [ Operators ]
+│   └── Test / "[" Operators
+├── Autosuggestions
 ├── History
 ├── Editor
 │   ├── Line Editor
@@ -900,7 +901,7 @@ Without arguments: applies redirects to the current shell's file descriptors.
 
 Local variables are visible only within the enclosing function. They shadow outer variables of the same name. Removed when the function returns.
 
-### Test / [ Operators ]
+### Test / "[" Operators
 
 **Unary (2 args):**
 
@@ -935,6 +936,28 @@ Local variables are visible only within the enclosing function. They shadow oute
 | `-ge` | greater or equal |
 | `-nt` | file newer than |
 | `-ot` | file older than |
+
+---
+</details>
+
+<details>
+<summary>Autosuggestions</summary>
+
+## Autosuggestions
+
+Fish-style grey suggestions displayed as the user types. Sourced from command history.
+
+| Key | Action |
+|-----|--------|
+| Right Arrow | Accept full suggestion |
+| Alt+Right | Accept one word from suggestion |
+
+| Config Field | Default | Description |
+|-------------|---------|-------------|
+| `[autosuggest] enabled` | `true` | Enable/disable |
+| `[autosuggest] min_chars` | `1` | Min input chars before suggesting |
+| `[autosuggest] strategy` | `"history"` | Source strategy |
+| `[autosuggest] highlight_color` | `"#6b7280"` | Suggestion text color |
 
 ---
 </details>
