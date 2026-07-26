@@ -2115,7 +2115,7 @@ $ bg %1                   # resume job 1 in background
 ---
 </details>
 
-</details>
+<details>
 <summary>Trapping</summary>
 
 ## Trapping
@@ -2131,12 +2131,12 @@ Trap handlers stored in `Env.traps`.
 
 Supported: `SIGINT`, `SIGTERM`, `SIGHUP`, `SIGTSTP`.
 
-Flow: signal arrives → `TRAP_SIGNAL` atomic set → main loop checks flag → looks up handler → tokenizes, parses, executes → flag reset.
+Signal arrives → `TRAP_SIGNAL` atomic set → main loop checks flag → looks up handler → tokenizes, parses, executes → flag reset.
 
 ---
 </details>
 
-</details>
+<details>
 <summary>License</summary>
 
 ## License
