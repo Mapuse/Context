@@ -99,8 +99,8 @@ impl Executor {
         if cfg.integration.enable_fzf && cfg.integration.fzf_key_bindings {
             let candidates = [
                 dirs::home_dir().map(|h| h.join(".fzf/shell/key-bindings.bash")),
-                Some(std::path::PathBuf::from("/usr/share/fzf/key-bindings.bash")),
-                Some(std::path::PathBuf::from("/usr/share/doc/fzf/examples/key-bindings.bash")),
+                Some(std::path::PathBuf::from("/system/share/fzf/key-bindings.bash")),
+                Some(std::path::PathBuf::from("/system/share/doc/fzf/examples/key-bindings.bash")),
             ];
             for candidate in candidates.into_iter().flatten() {
                 if candidate.is_file() {

@@ -91,8 +91,6 @@
 
 ## Overview
 
-A POSIX shell written in Rust. Single binary, no external runtime. 9200+ lines of Rust, 28 source files.
-
 | Category | What |
 |----------|------|
 | Lexer | `$'...'` ANSI-C quoting, `[[`/`]]` tokens, `>>\|` clobber |
@@ -363,7 +361,7 @@ Python engine initialized (PyO3, venv activated, theme/plugins loaded)
 Python plugins fire on_startup()
      │
      ▼
-[tui_mode] → theme.run() takes terminal, context exits when done
+[tui_mode] → theme.run() takes terminal, Context exits when done
      │
      ▼
 REPL loop begins
@@ -1959,8 +1957,8 @@ multi-file setup needed. Everything goes in one file.
 
 ### Themes
 
-A theme file defines how the prompt looks. context calls your functions with the
-full shell context as keyword arguments. Return whatever you want.
+A theme file defines how the prompt looks. Context calls your functions with the
+full shell Context as keyword arguments. Return whatever you want.
 
 ```python
 # ~/.config/context/theme.py
@@ -1986,7 +1984,7 @@ def render_prompt(**context):
 | `host` | Hostname |
 | `exit_code` | Last command exit status |
 | `git_branch` | Current git branch |
-| `shell_version` | context version |
+| `shell_version` | Context version |
 | `shell_name` | Shell name from branding |
 | `terminal_width` | Terminal width in columns |
 | `terminal_height` | Terminal height in rows |
@@ -1999,14 +1997,14 @@ def render_prompt(**context):
 | `lines_above` | `list[str]` | Lines above the input prompt |
 | `input_prefix` | `str` | Text before the cursor |
 | `right_prompt` | `str` | Right-side prompt text |
-| `colors` | `dict` | Color map (any keys, context reads `accent`, `success`, `error`, `primary`, `dim`, `text`, `cwd`) |
+| `colors` | `dict` | Color map (any keys, Context reads `accent`, `success`, `error`, `primary`, `dim`, `text`, `cwd`) |
 | *(any other keys)* | `str` | Stored in extra dict, accessible later |
 
-Or just return a string — context uses it as `input_prefix`.
+Or just return a string — Context uses it as `input_prefix`.
 
 ### Plugins
 
-A plugin file can define any public functions. context auto-discovers ALL of them
+A plugin file can define any public functions. Context auto-discovers ALL of them
 as hooks. No hardcoded hook list — define whatever functions you want.
 
 ```python
@@ -2067,7 +2065,7 @@ from textual.app import App
 class MyApp(App):
     CSS = "Screen { background: $surface }"
     def compose(self):
-        yield Label("My context TUI")
+        yield Label("My Context TUI")
 def run():
     MyApp().run()
     return True
@@ -2083,10 +2081,10 @@ tui_mode = true
 ```
 
 When `tui_mode = true` and your theme defines `run()`:
-1. context initializes config, signals, executor
+1. Context initializes config, signals, executor
 2. Disables raw mode, shows cursor
 3. Calls your `run()` function
-4. When `run()` returns, context exits
+4. When `run()` returns, Context exits
 
 ### Virtual Environments
 
@@ -2121,9 +2119,9 @@ venv: `pip install rich textual npyscreen blessed urwid prompt_toolkit`.
 ### Isolation
 
 The Python subsystem is fully isolated:
-- `catch_unwind` at every boundary — if Python panics, context falls back silently
+- `catch_unwind` at every boundary — if Python panics, Context falls back silently
 - `fallback_on_error = true` (default) — theme/plugin errors don't crash context
-- If Python is unavailable, context uses its native Rust prompt
+- If Python is unavailable, Context uses its native Rust prompt
 
 ---
 

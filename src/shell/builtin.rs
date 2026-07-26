@@ -1990,7 +1990,7 @@ fn cmd_command(args: &[String]) -> BuiltinResult {
         return BuiltinResult::ok();
     }
     if use_posix_path {
-        let posix_path = "/usr/local/bin:/usr/bin:/bin";
+        let posix_path = "/system/local/bin:/system/bin:/bin";
         let old_path = std::env::var("PATH").ok();
         std::env::set_var("PATH", posix_path);
         let result = exec_command(&args[i..]);

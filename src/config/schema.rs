@@ -753,7 +753,7 @@ pub struct BrandingConfig {
 impl Default for BrandingConfig {
     fn default() -> Self {
         Self {
-            app_name: "context".into(),
+            app_name: "Context".into(),
             version: default_branding_version(),
             shell_name: "context".into(),
             author: String::new(),
