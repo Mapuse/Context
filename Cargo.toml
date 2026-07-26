@@ -1,0 +1,26 @@
+[package]
+name = "context"
+version = "0.70.0"
+edition = "2021"
+description = "A fast, fully configurable POSIX shell"
+
+[features]
+default = ["python"]
+python = ["pyo3"]
+
+[dependencies]
+crossterm = "0.28"
+serde = { version = "1", features = ["derive"] }
+toml = "0.8"
+dirs = "6"
+glob = "0.3"
+libc = "0.2"
+regex = "1"
+wallust = "3.5"
+serde_json = "1"
+pyo3 = { version = "0.25", features = ["auto-initialize"], optional = true }
+
+[profile.release]
+opt-level = 3
+lto = true
+strip = true

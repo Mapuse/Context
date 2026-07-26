@@ -1,0 +1,13 @@
+# ~/.ctxrc — Commands and aliases
+# ================================
+
+# Aliases
+alias ll="ls -la"
+alias la="ls -a"
+alias l="ls"
+alias ..="cd .."
+alias ...="cd ../.."
+alias cls="clear"
+
+# Environment
+export EDITOR="vim"

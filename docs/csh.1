@@ -1,0 +1,131 @@
+.\" Csh Shell — Man Page
+.TH Context 1 "2026-07-17" "context 0.70.0" "User Commands"
+.SH NAME
+context \- a fast, fully configurable POSIX shell written in Rust
+.SH SYNOPSIS
+.B context
+.RI [ options ]
+.br
+.B context
+.B \-c
+.I command
+.SH DESCRIPTION
+.B context
+is a POSIX shell written entirely in Rust, featuring a custom line editor
+with syntax highlighting, true-color theming via TOML configuration,
+persistent command history, job control, and 30+ built-in commands.
+.SH OPTIONS
+.TP
+.B \-c \fIcommand\
+Execute the given command and exit.
+.TP
+.B \-h, \-\-help
+Show help message.
+.TP
+.B \-v, \-\-version
+Show version.
+.SH FEATURES
+.TP
+.B Syntax highlighting
+Real-time highlighting of variables ($VAR), operators (|, &&, ;),
+quoted strings, and command names in the input line.
+.TP
+.B True color
+Any hex color (#RRGGBB) works via 24-bit ANSI escape sequences.
+.TP
+.B TOML configuration
+Full configuration at ~/.config/context/c.toml with 15 sections.
+.TP
+.B Job control
+Background jobs (cmd &), jobs/fg/bg builtins.
+.TP
+.B Command substitution
+$(cmd) and backtick `cmd` forms.
+.TP
+.B Here documents and here strings
+<<EOF and <<<string redirections.
+.SH KEYBINDINGS
+.TP
+.B Ctrl+C
+Interrupt current process / cancel input line.
+.TP
+.B Ctrl+D
+Exit shell (when input is empty).
+.TP
+.B Ctrl+L
+Clear screen and redraw prompt.
+.TP
+.B Ctrl+R
+Reverse incremental search through history.
+.TP
+.B Ctrl+A
+Move cursor to beginning of line.
+.TP
+.B Ctrl+E
+Move cursor to end of line.
+.TP
+.B Ctrl+K
+Kill from cursor to end of line.
+.TP
+.B Ctrl+U
+Kill from cursor to beginning of line.
+.TP
+.B Ctrl+W
+Delete word before cursor.
+.TP
+.B Tab
+Command completion (PATH + current directory).
+.TP
+.B Up/Down
+Navigate command history.
+.SH BUILT-IN COMMANDS
+cd, exit, export, unset, alias, unalias, source, history, set, env,
+pwd, type, which, echo, printf, test, let, pushd, popd, dirs, readonly,
+declare, jobs, fg, bg, exec, true, false, builtin.
+.SH CONFIGURATION
+Configuration file: \fI~/.config/context/c.toml\
+.br
+Startup file: \fI~/.ctxrc\
+.br
+History file: \fI~/.csh_history\
+.SH CURSOR FORMAT
+The cursor is fully customizable via ~/.config/context/c.toml\.
+.PP
+Single character:
+.PP
+.RS 4
+[cursor]
+.br
+symbol = "_"
+.RE
+.PP
+Multi-line format (overrides symbol):
+.PP
+.RS 4
+[cursor]
+.br
+format = ["├── ", "│   ", "└── "]
+.br
+format_align = "left"
+.br
+format_colorize = true
+.RE
+.PP
+Each string in \fBformat\ is one line. The last line receives input.
+Any character or Unicode symbol works.
+.SH FILES
+.TP
+.I ~/.config/context/c.toml
+Main configuration file (15 sections: history, cursor, prompt, box_config,
+colors, symbols, ascii, execution, startup, editor, display, completion,
+signals, environment, branding).
+.TP
+.I ~/.ctxrc
+Sourced on startup for aliases, exports, and environment.
+.TP
+.I ~/.csh_history
+Persistent command history.
+.SH AUTHOR
+Csh Contributors
+.SH LICENSE
+MIT

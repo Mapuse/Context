@@ -1,0 +1,244 @@
+# Context Shell Configuration
+# ============================
+# All 15 sections documented. Commented lines show defaults.
+
+# ── History ────────────────────────────────────────────────────
+[history]
+max_size = 256
+file = "~/.ctx_history"
+deduplicate = true
+ignore_space = true
+ignore_patterns = []
+share_across_sessions = true
+
+# ── Cursor ─────────────────────────────────────────────────────
+# Single-char symbol (used when format is empty)
+# symbol = "❯"
+
+# Multi-line cursor format (overrides symbol when non-empty)
+# Each string is one line. Any line can be the input line.
+# format_input_line: which line (0-indexed) gets the input cursor
+#   -1 = last line (default), 0 = first line, 1 = second line, etc.
+#
+# Examples:
+#   File tree (input on last line):
+#     format = ["├── ", "│   ", "└── "]
+#     format_input_line = -1
+#
+#   File tree (input on first line):
+#     format = ["├── ", "│   ", "└── "]
+#     format_input_line = 0
+#
+#   Box (input in middle):
+#     format = ["╔═══", "║   ", "║ ❯ ", "║   ", "╚═══"]
+#     format_input_line = 2
+#
+#   Bracket with input on first line:
+#     format = ["[❯ ", " | "]
+#     format_input_line = 0
+#
+#   Decorative (input on second line):
+#     format = ["~~~ ", ">>> ", "~~~ "]
+#     format_input_line = 1
+format = []
+# format = ["├── ", "│   ", "└── "]
+
+[cursor]
+symbol = "_"
+blink = true
+color = "#6b7280"
+color_error = "#ef4444"
+style = "block"
+width = 1
+format_input_line = -1
+format_align = "left"
+format_padding = 0
+format_colorize = true
+
+# ── Prompt ─────────────────────────────────────────────────────
+[prompt]
+top_line_left = "context"
+top_line_right = ""
+color_cwd = "#9ca3af"
+color_prompt = "#22c55e"
+color_top = "#ffffff"
+color_symbol = "#22c55e"
+color_user = "#d1d5db"
+color_host = "#9ca3af"
+show_top_line = false
+gap_after_top = 0
+gap_after_middle = 0
+show_user_host = true
+user_host_format = "{user}@{host}"
+cwd_max_depth = 0
+show_git_branch = true
+git_branch_color = "#f59e0b"
+prompt_prefix = ""
+prompt_suffix = ""
+newline_before_prompt = false
+show_path = true
+
+# ── Box ────────────────────────────────────────────────────────
+[box_config]
+enabled = true
+border_color = "#ffffff"
+corner_tl = "╭"
+corner_tr = "╮"
+corner_bl = "╰"
+corner_br = "╯"
+horizontal_char = "─"
+vertical_char = "│"
+padding_left = 1
+padding_right = 1
+show_exit_code = true
+exit_label = "exit"
+exit_code_color = "#ef4444"
+output_max_lines = 500
+min_width = 40
+gap_before = 0
+gap_after = 0
+title = ""
+title_color = "#d1d5db"
+content_color = "#f9fafb"
+border_style = "rounded"
+separator_char = "·"
+show_title_only_when_busy = false
+top_line_padding = 1
+bottom_line_char = ""
+
+# ── Colors ─────────────────────────────────────────────────────
+[colors]
+primary = "#ffffff"
+accent = "#d1d5db"
+info = "#9ca3af"
+success = "#22c55e"
+err = "#ef4444"
+warning = "#f59e0b"
+dim = "#6b7280"
+text = "#f9fafb"
+bold = "#ffffff"
+underline = "#d1d5db"
+reverse = "#111827"
+bg_primary = "#111827"
+bg_err = "#3d0000"
+bg_success = "#003d1a"
+bg_warning = "#3d2e00"
+bg_info = "#1f2937"
+gradient_start = "#ffffff"
+gradient_mid = "#9ca3af"
+gradient_end = "#22c55e"
+
+# syntax highlighting colors: set to true to derive from the dynamic wallpaper
+# palette, false to use the hex values below
+# syntax_use_dynamic_colors = true
+
+# ── Symbols ────────────────────────────────────────────────────
+[symbols]
+prompt_char = "❯"
+note_char = "▸"
+exit_prefix = "exit"
+arrow_char = "→"
+separator_char = "·"
+git_branch_char = "⌿"
+directory_char = " "
+file_char = " "
+executable_char = "*"
+link_char = "@"
+pipe_char = "|"
+socket_char = "="
+
+# ── ASCII Art ──────────────────────────────────────────────────
+[ascii]
+path = ""
+show_in_box = false
+box_color = "#ffffff"
+margin_top = 1
+margin_bottom = 1
+margin_left = 2
+center = false
+
+# ── Execution ──────────────────────────────────────────────────
+[execution]
+shell = "/bin/bash"
+timeout_seconds = 0
+fork_method = "fork"
+env_passthrough = []
+env_filter = []
+umask = "0022"
+strip_env_on_exec = false
+path_override = ""
+
+# ── Startup ────────────────────────────────────────────────────
+[startup]
+show_welcome = true
+welcome_message = ""
+welcome_color = "#f9fafb"
+run_commands = []
+startup_delay_ms = 0
+show_config_path = false
+show_version = false
+
+# ── Editor ─────────────────────────────────────────────────────
+[editor]
+mode = "emacs"
+bell = "visible"
+auto_cd = true
+expand_aliases = true
+show_hidden_files = false
+colorize_output = true
+max_line_length = 4096
+word_delimiters = " \t\n|&;><`(){}[]$'\"\\"
+
+# ── Display ────────────────────────────────────────────────────
+[display]
+show_exit_code_on_error_only = true
+compact_mode = false
+color_mode = "true_color"
+utf8_mode = "full"
+show_command_duration = false
+duration_color = "#6b7280"
+show_timestamp = false
+timestamp_format = "%H:%M:%S"
+timestamp_color = "#6b7280"
+show_pid = false
+status_line = false
+status_line_format = "{cwd} | {exit_code} | {duration}"
+title_bar = false
+title_bar_format = "context — {cwd}"
+
+# ── Signals ────────────────────────────────────────────────────
+[signals]
+sigint_action = "cancel_line"
+sigquit_action = "ignore"
+sigtstp_action = "suspend"
+sigwinch_action = "redraw"
+forward_signals_to_child = true
+reset_terminal_on_exit = true
+
+# ── Environment ────────────────────────────────────────────────
+[environment]
+passthrough = []
+filter = []
+set_defaults = ["TERM=xterm-256color"]
+strip_on_exit = []
+
+# ── Branding ───────────────────────────────────────────────────
+[branding]
+app_name = "context"
+shell_name = "context"
+author = ""
+tagline = "a fast, fully configurable POSIX shell"
+show_version_on_start = false
+show_config_path_on_start = false
+
+# ── Dynamic Colors (wallust) ───────────────────────────────────
+# Extract colors from wallpaper using wallust.
+# Requires the `wallust` crate (alread integrated).
+[dynamic]
+enabled = false
+# wallpaper_path = "~/wallpaper.png"
+fallback_to_terminal_bg = true
+# Override specific color roles extracted from wallpaper:
+# [dynamic.color_mapping]
+# accent = "#ff0000"
+# success = "#00ff00"
