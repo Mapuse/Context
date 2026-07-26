@@ -21,11 +21,11 @@
 ├── Overview
 ├── Build & Install
 ├── Usage
-├── File Locations
+├── Locations
 ├── Architecture
 │   ├── Source Layout
 │   └── Data Flow Pipeline
-├── Shell Syntax
+├── Syntax
 │   ├── Simple Commands
 │   ├── Pipelines
 │   ├── Logical Operators
@@ -43,20 +43,19 @@
 │   ├── [[ ]] Test Expressions
 │   ├── Associative Arrays
 │   └── Control Flow
-├── Builtins Reference
+├── Builtins
 │   ├── All Builtins
 │   ├── Builtin Docs
 │   └── Test / [ Operators ]
-├── Autosuggestions
 ├── History
-├── Editor & Keybindings
+├── Editor
 │   ├── Line Editor
 │   ├── Emacs Mode (default)
 │   ├── Vi Mode
 │   ├── Kill Ring & Undo/Redo
 │   ├── Syntax Highlighting
 │   └── Custom Widgets
-├── Prompt System
+├── Prompt
 │   ├── PromptDisplay Structure
 │   ├── Dynamic Variables
 │   ├── Format Fields (Multi-Line Support)
@@ -64,29 +63,26 @@
 │   ├── Transient Prompt
 │   ├── Instant Prompt
 │   └── Async Prompt
-├── Signal Handling
-├── Environment Variables
-├── Module System
-├── Color System
+├── Signals
+├── Variables
+├── Modules
+├── Coloring
 ├── Configuration
-│   ├── Config File Locations
+│   ├── Config Locations
 │   └── Config Schema (25 Sections, 297 Fields)
-├── Python Integration
+├── Python
 │   ├── Themes
 │   ├── Plugins
 │   ├── TUI Mode
 │   └── Virtual Environments
-├── Job Control
-├── Trap System
-└── Test Suite
+├── Jobs
+├── Trapping
+└── License
 ```
 
 ---
 
-</details>
-
 <details>
-
 <summary>Overview</summary>
 
 ## Overview
@@ -135,8 +131,8 @@
 
 | Command | Description |
 |---------|-------------|
-| `cargo build` | Build (debug) |
-| `cargo build --release` | Build (release, optimized) |
+| `cargo build` | Build (Debug) |
+| `cargo build --release` | Build (Release) |
 | `cargo test` | Run all tests |
 | `cargo clippy` | Lint |
 
@@ -159,10 +155,7 @@ Binary output: `./target/release/context`
 
 ---
 
-</details>
-
 <details>
-
 <summary>Usage</summary>
 
 ## Usage
@@ -284,7 +277,7 @@ Binary output: `./target/release/context`
 | `-L` | `--instant-prompt` | Enable instant prompt from cache |
 | | `--no-instant-prompt` | Disable instant prompt |
 
-#### Job Control
+#### Jobs
 
 | Short | Long | Description |
 |-------|------|-------------|
@@ -369,13 +362,10 @@ REPL loop begins
 
 ---
 
-</details>
-
 <details>
+<summary>Locations</summary>
 
-<summary>File Locations</summary>
-
-## File Locations
+## Locations
 
 | Path | Purpose |
 |------|---------|
@@ -390,10 +380,7 @@ REPL loop begins
 
 ---
 
-</details>
-
 <details>
-
 <summary>Architecture</summary>
 
 ## Architecture
@@ -467,9 +454,9 @@ src/
 
 <details>
 
-<summary>Shell Syntax</summary>
+<summary>Syntax</summary>
 
-## Shell Syntax
+## Syntax
 
 ### Simple Commands
 
@@ -750,13 +737,10 @@ Functions support local variables via `local`. Scope is managed with a scope sta
 
 ---
 
-</details>
-
 <details>
+<summary>Builtins</summary>
 
-<summary>Builtins Reference</summary>
-
-## Builtins Reference
+## Builtins
 
 ### All Builtins
 
@@ -952,32 +936,8 @@ Local variables are visible only within the enclosing function. They shadow oute
 
 </details>
 
-<details>
-
-<summary>Autosuggestions</summary>
-
-## Autosuggestions
-
-Fish-style grey suggestions displayed as the user types. Sourced from command history.
-
-| Key | Action |
-|-----|--------|
-| Right Arrow | Accept full suggestion |
-| Alt+Right | Accept one word from suggestion |
-
-| Config Field | Default | Description |
-|-------------|---------|-------------|
-| `[autosuggest] enabled` | `true` | Enable/disable |
-| `[autosuggest] min_chars` | `1` | Min input chars before suggesting |
-| `[autosuggest] strategy` | `"history"` | Source strategy |
-| `[autosuggest] highlight_color` | `"#6b7280"` | Suggestion text color |
-
----
-
-</details>
 
 <details>
-
 <summary>History</summary>
 
 ## History
@@ -1003,13 +963,10 @@ Fish-style grey suggestions displayed as the user types. Sourced from command hi
 
 ---
 
-</details>
-
 <details>
+<summary>Editor</summary>
 
-<summary>Editor & Keybindings</summary>
-
-## Editor & Keybindings
+## Editor
 
 ### Line Editor
 
@@ -1121,13 +1078,10 @@ Green for success (exit 0), red for error. The command is loaded into the input 
 
 ---
 
-</details>
-
 <details>
+<summary>Prompt</summary>
 
-<summary>Prompt System</summary>
-
-## Prompt System
+## Prompt
 
 ### PromptDisplay Structure
 
@@ -1292,13 +1246,10 @@ newline_before_prompt = false    # blank line before prompt
 
 ---
 
-</details>
-
 <details>
+<summary>Signals</summary>
 
-<summary>Signal Handling</summary>
-
-## Signal Handling
+## Signals
 
 Uses `sigaction()`.
 
@@ -1324,13 +1275,10 @@ Uses `sigaction()`.
 
 ---
 
-</details>
-
 <details>
+<summary>Variables</summary>
 
-<summary>Environment Variables</summary>
-
-## Environment Variables
+## Variables
 
 | Variable | Value |
 |----------|-------|
@@ -1355,13 +1303,10 @@ Uses `sigaction()`.
 
 ---
 
-</details>
-
 <details>
+<summary>Modules</summary>
 
-<summary>Module System</summary>
-
-## Module System
+## Modules
 
 Modules are shell-script based, located at `~/.config/context/modules/<name>/`.
 
@@ -1382,13 +1327,10 @@ Environment changes from module scripts are merged back into the shell environme
 
 ---
 
-</details>
-
 <details>
+<summary>Coloring</summary>
 
-<summary>Color System</summary>
-
-## Color System
+## Coloring
 
 ### Auto-Detection
 
@@ -1412,15 +1354,12 @@ Any `#RRGGBB` hex color is converted to the best ANSI representation:
 
 ---
 
-</details>
-
 <details>
-
 <summary>Configuration</summary>
 
 ## Configuration
 
-### Config File Locations
+### Config Locations
 
 Search order (first match wins):
 
@@ -1929,7 +1868,7 @@ venv_path = "~/.venvs/context"
 tui_mode = false
 ```
 
-See [Python Integration](#python-integration) for full API docs.
+See [Python](#python-integration) for full API docs.
 
 ### Hot-Reload
 
@@ -1941,13 +1880,10 @@ Re-reads config file. Next prompt cycle uses new settings. No restart required.
 
 ---
 
-</details>
-
 <details>
+<summary>Python</summary>
 
-<summary>Python Integration</summary>
-
-## Python Integration
+## Python
 
 Embedded Python via PyO3. Any Python library works: rich, textual, npyscreen,
 blessed, urwid, prompt_toolkit, asciimatics, etc.
@@ -2125,13 +2061,10 @@ The Python subsystem is fully isolated:
 
 ---
 
-</details>
-
 <details>
+<summary>Jobs</summary>
 
-<summary>Job Control</summary>
-
-## Job Control
+## Jobs
 
 ```sh
 $ sleep 10 &              # background job
@@ -2148,12 +2081,9 @@ $ bg %1                   # resume job 1 in background
 ---
 
 </details>
+<summary>Trapping</summary>
 
-<details>
-
-<summary>Trap System</summary>
-
-## Trap System
+## Trapping
 
 Trap handlers stored in `Env.traps`.
 
@@ -2171,34 +2101,6 @@ Flow: signal arrives → `TRAP_SIGNAL` atomic set → main loop checks flag → 
 ---
 
 </details>
-
-<details>
-
-<summary>Test Suite</summary>
-
-## Test Suite
-
-```sh
-$ cargo test
-```
-
-| Module | Tests | Names |
-|--------|-------|-------|
-| `shell::lexer` | 16 | `test_simple_command`, `test_pipes`, `test_redirects`, `test_quotes`, `test_heredoc`, `test_here_string`, `test_glob`, `test_comment`, `test_and_or`, `test_subshell`, `test_less_amp`, `test_empty`, `test_brace_expansion`, `test_clobber_redirect`, `test_dollar_special_vars`, `test_amp_greater_greater` |
-| `shell::parser` | 18 | `test_simple_cmd`, `test_pipe`, `test_redirect`, `test_background`, `test_if`, `test_if_elif_else`, `test_for`, `test_and`, `test_or`, `test_assignment`, `test_function`, `test_while`, `test_until`, `test_case`, `test_subshell`, `test_semicolon_compound`, `test_pipeline_chain`, `test_bang_pipe`, `test_redirect_input`, `test_redirect_append`, `test_redirect_heredoc`, `test_dollar_paren`, `test_dollar_paren_nested`, `test_dollar_brace_var`, `test_double_semi`, `test_double_redirect`, `test_hash_after_space_is_comment`, `test_hash_at_start_is_comment`, `test_hash_mid_word`, `test_escape_in_word` |
-| `terminal::color` | 10 | `test_hex_to_ansi`, `test_hex_to_ansi_256`, `test_hex_to_ansi_16`, `test_hex_to_ansi_nocolor`, `test_strip_ansi`, `test_strip_ansi_cursor`, `test_strip_ansi_erase`, `test_visible_len`, `test_detect_color_capability` |
-| `terminal::prompt` | 3 | `test_shorten_cwd_home`, `test_shorten_cwd_subdir`, `test_shorten_cwd_max_depth` |
-| `shell::expand` | 8 | `test_glob_match_simple_star`, `test_glob_match_simple_question`, `test_glob_match_simple_mixed`, `test_glob_match_simple_star_empty_pattern`, `test_glob_match_simple_question_empty`, `test_resolve_user_home`, `test_split_shell_args_simple`, `test_split_shell_args_quoted`, `test_split_shell_args_single_quoted`, `test_split_shell_args_empty`, `test_split_shell_args_mixed` |
-| `shell::builtin` | 5 | `test_realpath_no_args`, `test_realpath_current_dir`, `test_realpath_nonexistent`, `test_getopts_advances_past_double_dash` |
-
-**Total: 85 tests, all passing. Zero clippy warnings.**
-
----
-
-</details>
-
-<details>
-
 <summary>License</summary>
 
 ## License
