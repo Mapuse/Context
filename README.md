@@ -82,6 +82,8 @@
 
 ---
 
+</details>
+
 <details>
 <summary>Overview</summary>
 
@@ -154,6 +156,7 @@ Binary output: `./target/release/context`
 | pyo3 | 0.25 | Embedded Python engine (themes, plugins, TUI) |
 
 ---
+</details>
 
 <details>
 <summary>Usage</summary>
@@ -361,6 +364,7 @@ REPL loop begins
 ```
 
 ---
+</details>
 
 <details>
 <summary>Locations</summary>
@@ -379,6 +383,7 @@ REPL loop begins
 | `~/.config/context/plugins/*.py` | Python plugins (user-created) |
 
 ---
+</details>
 
 <details>
 <summary>Architecture</summary>
@@ -449,11 +454,9 @@ src/
 ```
 
 ---
-
 </details>
 
 <details>
-
 <summary>Syntax</summary>
 
 ## Syntax
@@ -736,6 +739,7 @@ Functions support local variables via `local`. Scope is managed with a scope sta
 ```
 
 ---
+</details>
 
 <details>
 <summary>Builtins</summary>
@@ -933,9 +937,7 @@ Local variables are visible only within the enclosing function. They shadow oute
 | `-ot` | file older than |
 
 ---
-
 </details>
-
 
 <details>
 <summary>History</summary>
@@ -962,6 +964,7 @@ Local variables are visible only within the enclosing function. They shadow oute
 | `[history] sync_on_command` | `true` | Sync from file on each prompt |
 
 ---
+</details>
 
 <details>
 <summary>Editor</summary>
@@ -1077,6 +1080,7 @@ All widgets are dispatchable via `[keybindings]`. Built-in keybindings are overr
 Green for success (exit 0), red for error. The command is loaded into the input buffer for re-execution or editing.
 
 ---
+</details>
 
 <details>
 <summary>Prompt</summary>
@@ -1245,6 +1249,7 @@ newline_before_prompt = false    # blank line before prompt
 ```
 
 ---
+</details>
 
 <details>
 <summary>Signals</summary>
@@ -1274,6 +1279,7 @@ Uses `sigaction()`.
 | `NEED_REDRAW` | `SIGWINCH` |
 
 ---
+</details>
 
 <details>
 <summary>Variables</summary>
@@ -1302,6 +1308,7 @@ Uses `sigaction()`.
 | `$#` | Number of positional parameters |
 
 ---
+</details>
 
 <details>
 <summary>Modules</summary>
@@ -1326,6 +1333,7 @@ Modules are shell-script based, located at `~/.config/context/modules/<name>/`.
 Environment changes from module scripts are merged back into the shell environment.
 
 ---
+</details>
 
 <details>
 <summary>Coloring</summary>
@@ -1353,6 +1361,7 @@ Any `#RRGGBB` hex color is converted to the best ANSI representation:
 | No color | `""` | Empty string |
 
 ---
+</details>
 
 <details>
 <summary>Configuration</summary>
@@ -1879,6 +1888,7 @@ kill -USR1 $(pgrep context)
 Re-reads config file. Next prompt cycle uses new settings. No restart required.
 
 ---
+</details>
 
 <details>
 <summary>Python</summary>
@@ -2060,6 +2070,7 @@ The Python subsystem is fully isolated:
 - If Python is unavailable, Context uses its native Rust prompt
 
 ---
+</details>
 
 <details>
 <summary>Jobs</summary>
@@ -2079,6 +2090,7 @@ $ bg %1                   # resume job 1 in background
 | Foreground | `setpgid(pid, pid)` → own process group, `tcsetpgrp(pid)` → child gets terminal, `waitpid(pid)` → block, `tcsetpgrp(self)` → shell regains terminal |
 
 ---
+</details>
 
 </details>
 <summary>Trapping</summary>
@@ -2099,6 +2111,7 @@ Supported: `SIGINT`, `SIGTERM`, `SIGHUP`, `SIGTSTP`.
 Flow: signal arrives → `TRAP_SIGNAL` atomic set → main loop checks flag → looks up handler → tokenizes, parses, executes → flag reset.
 
 ---
+</details>
 
 </details>
 <summary>License</summary>
@@ -2108,5 +2121,4 @@ Flow: signal arrives → `TRAP_SIGNAL` atomic set → main loop checks flag → 
 The Unlicense — See [[**`LICENSE`**]](https://github.com/Mapuse/Context/src/branch/shell/LICENSE) for more details.
 
 ---
-
 </details>
