@@ -125,21 +125,76 @@
 </details>
 
 <details>
+<summary id="development">Development</summary>
 
-<summary>Build & Install</summary>
+## Building
 
-## Build & Install
+| Profile | Command | Flags | Use case |
+| ------- | ------- | ----- | -------- |
+| Debug | `cargo build` | — | Development iteration, fast compile |
+| Release | `cargo build --release` | `opt-level = 3`, `lto = true`, `strip = true` | Production binary, minimised size |
+| Check | `cargo check` | — | Compile-only verification, no artifacts |
 
-**Requirements:** `rustc 1.79+` (nightly recommended), `cargo`
+```shell
+# Compile-only verification (fastest)
+cargo check
 
-| Command | Description |
-|---------|-------------|
-| `cargo build` | Build (Debug) |
-| `cargo build --release` | Build (Release) |
-| `cargo test` | Run all tests |
-| `cargo clippy` | Lint |
+# Debug build
+cargo build
 
-Binary output: `./target/release/context`
+# Release build (optimised for size)
+cargo build --release
+```
+
+## Installation
+
+All build systems auto-detect `x86_64`/`aarch64` and select the correct musl target. Cross-compilation files are in `env.mk`, `toolchain.cmake`, and `cross.txt` (generated via `gen-cross.sh`).
+
+### Cargo (direct)
+
+```shell
+cargo build --release
+# Binary: target/release/context
+# Install:
+install -Dm755 target/release/context /system/bin/context
+```
+
+### Make
+
+```shell
+make build                    # auto-detects arch, builds for host
+make install                  # installs to /system/bin/context
+make install DESTDIR=/mnt     # staged install
+```
+
+### Meson
+
+```shell
+meson setup builddir --cross-file cross.txt --prefix=/system
+meson compile -C builddir
+meson install -C builddir
+```
+
+### Ninja
+
+```shell
+ninja -f build.ninja                       # build
+ninja -f build.ninja install DESTDIR=/mnt  # staged install
+```
+
+### CMake
+
+```shell
+cmake -B build -DCMAKE_TOOLCHAIN_FILE=toolchain.cmake -DCMAKE_INSTALL_PREFIX=/system
+cmake --build build
+cmake --install build
+```
+
+### MCX (package manager)
+
+```shell
+mcx -i context
+```
 
 **Dependencies:**
 
@@ -155,6 +210,113 @@ Binary output: `./target/release/context`
 | wallust | 3.5 | Wallpaper color extraction (k-means, fast_resize, color spaces) |
 | serde_json | 1 | JSON serialization for dynamic color data |
 | pyo3 | 0.25 | Embedded Python engine (themes, plugins, TUI) |
+
+## Testing
+
+```shell
+# Run all tests (unit + integration)
+cargo test
+
+# Run with stdout/stderr visible
+cargo test -- --nocapture
+
+# Run a specific test by name
+cargo test -- test_name
+
+# Run with all features and release mode
+cargo test --release --all-features
+```
+
+## Linting
+
+```shell
+# Clippy (lint checks)
+cargo clippy -- -D warnings
+
+# Format check
+cargo fmt --check
+
+# Format in place
+cargo fmt
+```
+
+## Auditing
+
+```shell
+# Check for security advisories in dependencies
+cargo audit
+```
+
+## Debugging
+
+```shell
+# Build with debug assertions enabled in release
+cargo build --profile release-debug  # requires Cargo.toml profile
+
+# Run with RUST_LOG for tracing
+RUST_LOG=debug context
+
+# Run with backtrace on panic
+RUST_BACKTRACE=1 context
+
+# Run under strace for syscall tracing
+strace -f -o /tmp/context.strace ./target/release/context
+
+# Memory profiling with valgrind
+valgrind --tool=massif ./target/release/context
+ms_print massif.out.* | less
+```
+
+## Profiling
+
+```shell
+# perf profiling (Linux)
+perf record --call-graph dwarf ./target/release/context
+perf report
+
+# Generate flamegraph
+perf script | inferno-collapse-perf > stacks.folded
+inferno-flamegraph stacks.folded > flamegraph.svg
+
+# CPU sampling with perf stat
+perf stat -e cycles,instructions,cache-misses,faults ./target/release/context
+
+# Heap profiling with dhat (requires `dhat` feature)
+# Run with DHAT_VALIDATE=1 and parse dhat-heap.json
+```
+
+## Continuous integration
+
+```yaml
+# Expected CI pipeline (GitHub Actions)
+steps:
+  - name: Checkout
+    run: git checkout ${{ github.ref }}
+
+  - name: Build
+    run: cargo build --release
+
+  - name: Test
+    run: cargo test --release
+
+  - name: Lint
+    run: cargo clippy -- -D warnings
+
+  - name: Format
+    run: cargo fmt --check
+
+  - name: Audit
+    run: cargo audit
+```
+
+## Cargo.toml release profile
+
+```toml
+[profile.release]
+opt-level = 3         # Optimise for speed
+lto = true            # Link-time optimisation
+strip = true          # Strip symbols
+```
 
 ---
 </details>

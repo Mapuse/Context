@@ -724,6 +724,17 @@ impl Executor {
             let args = vec!["cd".to_string(), cmd.clone()];
             return builtin::run(&args, &mut self.env, &self.cfg, self.last_status).status;
         } else {
+            let hook = &self.cfg.execution.command_not_found_hook;
+            if !hook.is_empty() {
+                use std::process::Command;
+                let status = Command::new(&hook)
+                    .arg(cmd)
+                    .status();
+                return match status {
+                    Ok(s) => s.code().unwrap_or(127),
+                    Err(_) => 127,
+                };
+            }
             if self.cfg.execution.cdspell {
                 if let Some(suggestion) = spell_correct(cmd) {
                     eprintln!("context: {}: command not found. Did you mean '{}'?", cmd, suggestion);

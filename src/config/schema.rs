@@ -30,7 +30,7 @@ fn default_horizontal() -> String { "─".into() }
 fn default_vertical() -> String { "│".into() }
 fn default_exit_label() -> String { "exit".into() }
 fn default_history_path() -> String { "~/.ctx_history".into() }
-fn default_shell() -> String { "/bin/bash".into() }
+fn default_shell() -> String { "/bin/context".into() }
 fn default_user_host_format() -> String { "{user}@{host}".into() }
 fn default_cursor_symbol() -> String { "_".into() }
 
@@ -547,6 +547,7 @@ pub struct ExecutionConfig {
     pub bash_compat: bool,
     pub max_forks_per_command: u32,
     pub exit_on_pipefail: bool,
+    pub command_not_found_hook: String,
 }
 
 impl Default for ExecutionConfig {
@@ -563,6 +564,7 @@ impl Default for ExecutionConfig {
             bash_compat: false,
             max_forks_per_command: 128,
             exit_on_pipefail: false,
+            command_not_found_hook: String::new(),
         }
     }
 }
