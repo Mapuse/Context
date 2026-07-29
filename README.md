@@ -78,7 +78,8 @@
 │   └── Virtual Environments
 ├── Jobs
 ├── Trapping
-└── License
+├── License
+└── Credits
 ```
 
 ---
