@@ -344,7 +344,7 @@ strip = true          # Strip symbols
 |-------|------|-------------|
 | `-h` | `--help` | Show help message and exit |
 | `-v` | `--version` | Show version number and exit |
-| `-V` | `--verbose-version` | Show detailed version, build info, and arch |
+| `-V` | `--verbose` | Show detailed version, build info, and arch |
 | `-l` | `--license` | Show license information and exit |
 | `-a` | `--authors` | Show authors and exit |
 
@@ -374,7 +374,7 @@ strip = true          # Strip symbols
 | `-r` | `--restricted` | Run in restricted mode (no cd, no export, etc.) |
 | `-i` | `--interactive` | Force interactive mode |
 | `-I` | `--no-interactive` | Force non-interactive mode |
-| `-b` | `--bash-compat` | Enable bash compatibility shims |
+| `-b` | `--bash` | Enable bash compatibility shims |
 
 #### Startup
 

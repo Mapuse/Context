@@ -987,7 +987,7 @@ impl CliOptions {
                 "-v" | "--version" => opts.version = true,
                 "-l" | "--license" => opts.license = true,
                 "-a" | "--authors" => opts.authors = true,
-                "-V" | "--verbose-version" => opts.verbose_version = true,
+                "-V" | "--verbose" => opts.verbose_version = true,
                 "-c" | "--command" => {
                     i += 1;
                     opts.command = args.get(i).cloned();
@@ -1023,7 +1023,7 @@ impl CliOptions {
                 "-r" | "--restricted" => opts.restricted = true,
                 "-i" | "--interactive" => opts.interactive = true,
                 "-I" | "--no-interactive" => opts.no_interactive = true,
-                "-b" | "--bash-compat" => opts.bash_compat = true,
+                "-b" | "--bash" => opts.bash_compat = true,
                 "-q" | "--quiet" => opts.quiet = true,
                 "-Q" | "--verbose" => opts.verbose = true,
                 "-d" | "--debug" => opts.debug = true,
@@ -1148,7 +1148,7 @@ fn print_help() {
     eprintln!("INFO:");
     eprintln!("  -h, --help               Show this help message");
     eprintln!("  -v, --version            Show version number");
-    eprintln!("  -V, --verbose-version    Show detailed version and build info");
+    eprintln!("  -V, --verbose    Show detailed version and build info");
     eprintln!("  -l, --license            Show license information");
     eprintln!("  -a, --authors            Show authors");
     eprintln!();
@@ -1169,7 +1169,7 @@ fn print_help() {
     eprintln!("  -r, --restricted         Run in restricted mode (no cd, no export, etc.)");
     eprintln!("  -i, --interactive        Force interactive mode");
     eprintln!("  -I, --no-interactive     Force non-interactive mode");
-    eprintln!("  -b, --bash-compat        Enable bash compatibility shims");
+    eprintln!("  -b, --bash        Enable bash compatibility shims");
     eprintln!();
     eprintln!("STARTUP:");
     eprintln!("  -n, --norc               Don't read the rc file (~/.config/ctx/c.toml)");
