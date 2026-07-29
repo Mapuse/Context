@@ -2302,8 +2302,16 @@ Signal arrives → `TRAP_SIGNAL` atomic set → main loop checks flag → looks 
 <summary>License</summary>
 
 ## License
+**MIT License** ─ See [[**`LICENSE`**](https://github.com/Mapuse/.github/blob/profile/LICENSE)] for More Details.
 
-The Unlicense — See [[**`LICENSE`**]](https://github.com/Mapuse/Context/src/branch/shell/LICENSE) for more details.
+---
+</details>
+
+<details>
+<summary>Credits</summary>
+
+- **`Cudane`** — The Distribution.
+- **`MCX`** — Package Manager.
 
 ---
 </details>
