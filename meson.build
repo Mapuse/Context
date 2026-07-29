@@ -4,7 +4,6 @@ project('context', 'rust',
   default_options : [
     'optimization=3',
     'strip=true',
-    'lto=full',
   ],
 )
 
