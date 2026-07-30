@@ -1,3 +1,5 @@
+##
+
 ```shell
  ██████╗ ██████╗ ███╗   ██╗████████╗███████╗██╗  ██╗████████╗               
 ██╔════╝██╔═══██╗████╗  ██║╚══██╔══╝██╔════╝╚██╗██╔╝╚══██╔══╝               
@@ -7,9 +9,13 @@
  ╚═════╝ ╚═════╝ ╚═╝  ╚═══╝   ╚═╝   ╚══════╝╚═╝  ╚═╝   ╚═╝
 ```
 
+##
+
 `▐▀` `-` `▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▌`
 
-- **`The Shell of Cudane`** — `v0.70.0`
+- **`Context (ctx)`** is a **`POSIX`** shell written in **`Rust`** for **`Performance`** and **`Customization`**, providing a full experience of safety without memory leaks.
+
+- **`Version`**: **`v0.70.0`**
 
 `▐▄` `-` `▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▌`
 
