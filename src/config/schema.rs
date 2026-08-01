@@ -29,7 +29,7 @@ fn default_corner_br() -> String { "╯".into() }
 fn default_horizontal() -> String { "─".into() }
 fn default_vertical() -> String { "│".into() }
 fn default_exit_label() -> String { "exit".into() }
-fn default_history_path() -> String { "~/.ctx_history".into() }
+fn default_history_path() -> String { "~/.ctx/.history".into() }
 fn default_shell() -> String { "/bin/context".into() }
 fn default_user_host_format() -> String { "{user}@{host}".into() }
 fn default_cursor_symbol() -> String { "_".into() }
@@ -956,6 +956,7 @@ impl Default for DynamicColorsConfig {
 pub struct PythonConfig {
     pub enabled: bool,
     pub theme: String,
+    pub tui: String,
     pub plugins: Vec<String>,
     pub fallback_on_error: bool,
     pub venv_path: String,
@@ -967,6 +968,7 @@ impl Default for PythonConfig {
         Self {
             enabled: false,
             theme: default_empty_string(),
+            tui: default_empty_string(),
             plugins: vec![],
             fallback_on_error: true,
             venv_path: default_empty_string(),

@@ -13,9 +13,9 @@
 
 `▐▀` `-` `▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▌`
 
-- **`Context (ctx)`** is a **`POSIX`** shell written in **`Rust`** for **`Performance`** and **`Customization`**, providing a full experience of safety without memory leaks.
+- **`[Context]`** (`ctx`) is a **`[POSIX]`** shell written in **`[Rust]`** for **`[Performance]`** and **`[Customization]`**, providing a full experience of **`[Safety]`** without memory leaks.
 
-- **`Version`**: **`v0.70.0`**
+- **`Version`**: **`[v0.70.0]`**
 
 `▐▄` `-` `▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▌`
 
@@ -23,77 +23,135 @@
 
 <summary>Contents</summary>
 
-```
-├── Overview
-├── Build & Install
-├── Usage
-├── Locations
-├── Architecture
-│   ├── Source Layout
-│   └── Data Flow Pipeline
-├── Syntax
-│   ├── Simple Commands
-│   ├── Pipelines
-│   ├── Logical Operators
-│   ├── Redirects
-│   ├── Variable Expansion
-│   ├── Parameter Expansion Extras
-│   ├── Command Substitution
-│   ├── Arithmetic Expansion
-│   ├── Floating Point Math
-│   ├── Tilde Expansion
-│   ├── Brace Expansion
-│   ├── Glob Expansion
-│   ├── ANSI-C Quoting
-│   ├── Regex Matching
-│   ├── [[ ]] Test Expressions
-│   ├── Associative Arrays
-│   └── Control Flow
-├── Builtins
-│   ├── All Builtins
-│   ├── Builtin Docs
-│   └── Test / "[" Operators
-├── Autosuggestions
-├── History
-├── Editor
-│   ├── Line Editor
-│   ├── Emacs Mode (default)
-│   ├── Vi Mode
-│   ├── Kill Ring & Undo/Redo
-│   ├── Syntax Highlighting
-│   └── Custom Widgets
-├── Prompt
-│   ├── PromptDisplay Structure
-│   ├── Dynamic Variables
-│   ├── Format Fields (Multi-Line Support)
-│   ├── Right Prompt (RPROMPT)
-│   ├── Transient Prompt
-│   ├── Instant Prompt
-│   └── Async Prompt
-├── Signals
-├── Variables
-├── Modules
-├── Coloring
-├── Configuration
-│   ├── Config Locations
-│   └── Config Schema (25 Sections, 297 Fields)
-├── Python
-│   ├── Themes
-│   ├── Plugins
-│   ├── TUI Mode
-│   └── Virtual Environments
-├── Jobs
-├── Trapping
-├── License
-└── Credits
-```
+## Table of Contents
+
+- [**`[Overview]`**](#overview)
+- [**`[Building]`**](#building)
+- [**`[Installation]`**](#installation)
+  - [**`[Cargo (direct)]`**](#cargo-direct)
+  - [**`[Make]`**](#make)
+  - [**`[Meson]`**](#meson)
+  - [**`[Ninja]`**](#ninja)
+  - [**`[CMake]`**](#cmake)
+  - [**`[MCX (package manager)]`**](#mcx-package-manager)
+- [**`[Testing]`**](#testing)
+- [**`[Linting]`**](#linting)
+- [**`[Auditing]`**](#auditing)
+- [**`[Debugging]`**](#debugging)
+- [**`[Profiling]`**](#profiling)
+- [**`[Continuous integration]`**](#continuous-integration)
+- [**`[Cargo.toml release profile]`**](#cargotoml-release-profile)
+- [**`[Usage]`**](#usage)
+  - [**`[CLI Flags]`**](#cli-flags)
+    - [**`[Info]`**](#info)
+    - [**`[Command Execution]`**](#command-execution)
+    - [**`[Environment]`**](#environment)
+    - [**`[Shell Mode]`**](#shell-mode)
+    - [**`[Startup]`**](#startup)
+    - [**`[Output and Debug]`**](#output-and-debug)
+    - [**`[Terminal]`**](#terminal)
+    - [**`[History]`**](#history)
+    - [**`[Prompt]`**](#prompt)
+    - [**`[Jobs]`**](#jobs)
+    - [**`[Signals]`**](#signals)
+    - [**`[Security]`**](#security)
+    - [**`[Configuration]`**](#configuration)
+    - [**`[Config Generation]`**](#config-generation)
+    - [**`[Branding]`**](#branding)
+- [**`[Locations]`**](#locations)
+- [**`[Architecture]`**](#architecture)
+  - [**`[Source Layout]`**](#source-layout)
+  - [**`[Data Flow Pipeline]`**](#data-flow-pipeline)
+- [**`[Syntax]`**](#syntax)
+  - [**`[Simple Commands]`**](#simple-commands)
+  - [**`[Multi-Line Input]`**](#multi-line-input)
+  - [**`[Pipelines]`**](#pipelines)
+  - [**`[Logical Operators]`**](#logical-operators)
+  - [**`[Redirects]`**](#redirects)
+  - [**`[Variable Expansion]`**](#variable-expansion)
+  - [**`[Parameter Expansion Extras]`**](#parameter-expansion-extras)
+  - [**`[Command Substitution]`**](#command-substitution)
+  - [**`[Arithmetic Expansion]`**](#arithmetic-expansion)
+  - [**`[Floating Point Math]`**](#floating-point-math)
+  - [**`[Tilde Expansion]`**](#tilde-expansion)
+  - [**`[Brace Expansion]`**](#brace-expansion)
+  - [**`[Glob Expansion]`**](#glob-expansion)
+  - [**`[ANSI-C Quoting]`**](#ansi-c-quoting)
+  - [**`[Regex Matching]`**](#regex-matching)
+  - [**`[Test Expressions]`**](#--test-expressions)
+  - [**`[Associative Arrays]`**](#associative-arrays)
+  - [**`[Control Flow]`**](#control-flow)
+- [**`[Builtins]`**](#builtins)
+  - [**`[All Builtins]`**](#all-builtins)
+  - [**`[Builtin Docs]`**](#builtin-docs)
+  - [**`[Test / "\[" Operators]`**](#test---operators)
+- [**`[Autosuggestions]`**](#autosuggestions)
+- [**`[History]`**](#history-1)
+- [**`[Editor]`**](#editor)
+  - [**`[Line Editor]`**](#line-editor)
+  - [**`[Emacs Mode (default)]`**](#emacs-mode-default)
+  - [**`[Vi Mode]`**](#vi-mode)
+  - [**`[Kill Ring \& Undo/Redo]`**](#kill-ring--undoredo)
+  - [**`[Syntax Highlighting]`**](#syntax-highlighting)
+  - [**`[Custom Widgets]`**](#custom-widgets)
+- [**`[Prompt]`**](#prompt-1)
+  - [**`[PromptDisplay Structure]`**](#promptdisplay-structure)
+  - [**`[Dynamic Variables]`**](#dynamic-variables)
+  - [**`[Format Fields (Multi-Line Support)]`**](#format-fields-multi-line-support)
+  - [**`[Right Prompt (RPROMPT)]`**](#right-prompt-rprompt)
+  - [**`[Transient Prompt]`**](#transient-prompt)
+  - [**`[Instant Prompt]`**](#instant-prompt)
+  - [**`[Async Prompt]`**](#async-prompt)
+  - [**`[Prompt Appearance]`**](#prompt-appearance)
+- [**`[Signals]`**](#signals-1)
+- [**`[Variables]`**](#variables)
+- [**`[Modules]`**](#modules)
+- [**`[Coloring]`**](#coloring)
+  - [**`[Auto-Detection]`**](#auto-detection)
+  - [**`[Graceful Degradation]`**](#graceful-degradation)
+- [**`[Configuration]`**](#configuration-1)
+  - [**`[Config Locations]`**](#config-locations)
+  - [**`[Config Schema (25 Sections, 297 Fields)]`**](#config-schema-25-sections-297-fields)
+    - [**`[history]`**]`**](#history-2)
+    - [**`[cursor]`**]`**](#cursor)
+    - [**`[prompt]`**]`**](#prompt-2)
+    - [**`[box_config]`**]`**](#box_config)
+    - [**`[colors]`**]`**](#colors)
+    - [**`[symbols]`**]`**](#symbols)
+    - [**`[ascii]`**]`**](#ascii)
+    - [**`[execution]`**]`**](#execution)
+    - [**`[startup]`**]`**](#startup-1)
+    - [**`[editor]`**]`**](#editor-1)
+    - [**`[display]`**]`**](#display)
+    - [**`[signals]`**]`**](#signals-2)
+    - [**`[environment]`**]`**](#environment-1)
+    - [**`[branding]`**]`**](#branding-1)
+    - [**`[autosuggest]`**]`**](#autosuggest)
+    - [**`[keybindings]`**]`**](#keybindings)
+    - [**`[jobs]`**]`**](#jobs-1)
+    - [**`[clipboard]`**]`**](#clipboard)
+    - [**`[integration]`**]`**](#integration)
+    - [**`[security]`**]`**](#security-1)
+    - [**`[performance]`**]`**](#performance)
+    - [**`[modes]`**]`**](#modes)
+    - [**`[dynamic]`**]`**](#dynamic)
+    - [**`[python]`**]`**](#python)
+  - [**`[Hot-Reload]`**](#hot-reload)
+- [**`[Python]`**](#python-1)
+  - [**`[Themes]`**](#themes)
+  - [**`[Plugins]`**](#plugins)
+  - [**`[TUI Mode]`**](#tui-mode)
+  - [**`[Virtual Environments]`**](#virtual-environments)
+  - [**`[Isolation]`**](#isolation)
+- [**`[Jobs]`**](#jobs-2)
+- [**`[Trapping]`**](#trapping)
 
 ---
 
 </details>
 
 <details>
-<summary>Overview</summary>
+<summary id="overview">Overview</summary>
 
 ## Overview
 
@@ -329,7 +387,7 @@ strip = true          # Strip symbols
 </details>
 
 <details>
-<summary>Usage</summary>
+<summary id="usage">Usage</summary>
 
 ## Usage
 
@@ -537,7 +595,7 @@ REPL loop begins
 </details>
 
 <details>
-<summary>Locations</summary>
+<summary id="locations">Locations</summary>
 
 ## Locations
 
@@ -551,12 +609,14 @@ REPL loop begins
 | `~/.config/context/.instant_prompt` | Cached prompt for instant display |
 | `~/.config/context/theme.py` | Python theme (user-created) |
 | `~/.config/context/plugins/*.py` | Python plugins (user-created) |
+| `~/.config/context/t.desc` | Theme/TUI descriptor registry (also `/etc/context/t.desc`, `./t.desc`) |
+| `~/.config/context/themes/*.py` | Theme files referenced by `t.desc` |
 
 ---
 </details>
 
 <details>
-<summary>Architecture</summary>
+<summary id="architecture">Architecture</summary>
 
 ## Architecture
 
@@ -627,7 +687,7 @@ src/
 </details>
 
 <details>
-<summary>Syntax</summary>
+<summary id="syntax">Syntax</summary>
 
 ## Syntax
 
@@ -912,7 +972,7 @@ Functions support local variables via `local`. Scope is managed with a scope sta
 </details>
 
 <details>
-<summary>Builtins</summary>
+<summary id="builtins">Builtins</summary>
 
 ## Builtins
 
@@ -1110,7 +1170,7 @@ Local variables are visible only within the enclosing function. They shadow oute
 </details>
 
 <details>
-<summary>Autosuggestions</summary>
+<summary id="autosuggestions">Autosuggestions</summary>
 
 ## Autosuggestions
 
@@ -1132,7 +1192,7 @@ Fish-style grey suggestions displayed as the user types. Sourced from command hi
 </details>
 
 <details>
-<summary>History</summary>
+<summary id="history">History</summary>
 
 ## History
 
@@ -1159,7 +1219,7 @@ Fish-style grey suggestions displayed as the user types. Sourced from command hi
 </details>
 
 <details>
-<summary>Editor</summary>
+<summary id="editor">Editor</summary>
 
 ## Editor
 
@@ -1275,7 +1335,7 @@ Green for success (exit 0), red for error. The command is loaded into the input 
 </details>
 
 <details>
-<summary>Prompt</summary>
+<summary id="prompt">Prompt</summary>
 
 ## Prompt
 
@@ -1382,10 +1442,10 @@ This applies to all format fields:
 # Example: multi-line welcome message
 [startup]
 welcome_message = [
-    "  ╔═══════════════════════╗",
+    "  ╔═════════════════════════╗",
     "  ║  Welcome to {app_name}  ║",
-    "  ║  {version}             ║",
-    "  ╚═══════════════════════╝"
+    "  ║  {version}              ║",
+    "  ╚═════════════════════════╝"
 ]
 ```
 
@@ -1444,7 +1504,7 @@ newline_before_prompt = false    # blank line before prompt
 </details>
 
 <details>
-<summary>Signals</summary>
+<summary id="signals">Signals</summary>
 
 ## Signals
 
@@ -1474,7 +1534,7 @@ Uses `sigaction()`.
 </details>
 
 <details>
-<summary>Variables</summary>
+<summary id="variables">Variables</summary>
 
 ## Variables
 
@@ -1503,7 +1563,7 @@ Uses `sigaction()`.
 </details>
 
 <details>
-<summary>Modules</summary>
+<summary id="modules">Modules</summary>
 
 ## Modules
 
@@ -1528,7 +1588,7 @@ Environment changes from module scripts are merged back into the shell environme
 </details>
 
 <details>
-<summary>Coloring</summary>
+<summary id="coloring">Coloring</summary>
 
 ## Coloring
 
@@ -1556,7 +1616,7 @@ Any `#RRGGBB` hex color is converted to the best ANSI representation:
 </details>
 
 <details>
-<summary>Configuration</summary>
+<summary id="configuration">Configuration</summary>
 
 ## Configuration
 
@@ -1762,10 +1822,7 @@ All accept any `#RRGGBB` hex value. Auto-degraded to terminal capability.
 |-------|---------|-------------|
 | `prompt_char` | `"❯"` | Prompt symbol |
 | `note_char` | `"▸"` | Note symbol |
-| `error_char` | `"✘"` | Error symbol |
 | `exit_prefix` | `"exit"` | Exit prefix |
-| `success_char` | `"✓"` | Success symbol |
-| `warning_char` | `"⚠"` | Warning symbol |
 | `arrow_char` | `"→"` | Arrow |
 | `separator_char` | `"·"` | Separator |
 | `git_branch_char` | `"⌿"` | Git branch icon |
@@ -1778,7 +1835,7 @@ All accept any `#RRGGBB` hex value. Auto-degraded to terminal capability.
 | `continuation_char` | `"·"` | Continuation prompt |
 | `job_char` | `"&"` | Background job indicator |
 
-`prompt_char` and `error_char` are used in the prompt. Others are available for prompt format strings.
+`prompt_char` is used in the prompt. Others are available for prompt format strings.
 
 > **Note:** Status symbols (`✓`/`✘`/`⚠`) are NOT auto-rendered in the prompt. Use `{success_char}`, `{error_char}`, or `{status_char}` in your format strings to display them. The prompt only renders what your config specifies.
 
@@ -2051,7 +2108,8 @@ urwid, prompt_toolkit, asciimatics, etc. Venv support included.
 | Field | Default | Description |
 |-------|---------|-------------|
 | `enabled` | `false` | Enable Python engine |
-| `theme` | `""` | Path to a single `.py` theme file |
+| `theme` | `""` | Theme name or path to a single `.py` theme file. A name is resolved via `t.desc`; empty uses a `t.desc` entry as the default |
+| `tui` | `""` | TUI name or path to a single `.py` TUI file. A name is resolved via `t.desc`; empty uses a `t.desc` entry as the default |
 | `plugins` | `[]` | List of paths to `.py` plugin files |
 | `fallback_on_error` | `true` | Fall back to native if Python fails |
 | `venv_path` | `""` | Path to venv — auto-activates before loading theme/plugins |
@@ -2060,7 +2118,7 @@ urwid, prompt_toolkit, asciimatics, etc. Venv support included.
 ```toml
 [python]
 enabled = true
-theme = "~/.config/context/theme.py"
+theme = "context"
 plugins = [
     "~/.config/context/plugins/git_status.py",
     "~/.config/context/plugins/weather.py",
@@ -2069,7 +2127,12 @@ venv_path = "~/.venvs/context"
 tui_mode = false
 ```
 
-See [Python](#python-integration) for full API docs.
+Themes and TUIs can be registered in a `t.desc` TOML file, loaded from the first existing, parseable file among `~/.config/context/t.desc`, `/etc/context/t.desc`, `./t.desc`, or `<cwd>/t.desc` (files are never merged; `path` values support `~` expansion) with
+`[theme.<id>]` / `[tui.<id>]` sections containing `name`, `path`, and optional
+`description`. When `theme` or `tui` is a registered name it is resolved to the
+matching `path`; an empty value uses a `t.desc` entry as the default.
+
+See [**`[Python]`**](#python-integration) for full API docs.
 
 ### Hot-Reload
 
@@ -2083,7 +2146,7 @@ Re-reads config file. Next prompt cycle uses new settings. No restart required.
 </details>
 
 <details>
-<summary>Python</summary>
+<summary id="python">Python</summary>
 
 ## Python
 
@@ -2096,7 +2159,10 @@ multi-file setup needed. Everything goes in one file.
 ### Themes
 
 A theme file defines how the prompt looks. Context calls your functions with the
-full shell Context as keyword arguments. Return whatever you want.
+full shell Context as keyword arguments. Return whatever you want. The theme engine
+loads the file as a Python module and calls `render_prompt(**context)`, then
+`render_right_prompt(**context)` and `render_command_summary(**context)` when the
+theme defines them.
 
 ```python
 # ~/.config/context/theme.py
@@ -2265,7 +2331,7 @@ The Python subsystem is fully isolated:
 </details>
 
 <details>
-<summary>Jobs</summary>
+<summary id="jobs">Jobs</summary>
 
 ## Jobs
 
@@ -2285,7 +2351,7 @@ $ bg %1                   # resume job 1 in background
 </details>
 
 <details>
-<summary>Trapping</summary>
+<summary id="trapping">Trapping</summary>
 
 ## Trapping
 
@@ -2300,25 +2366,18 @@ Trap handlers stored in `Env.traps`.
 
 Supported: `SIGINT`, `SIGTERM`, `SIGHUP`, `SIGTSTP`.
 
-Signal arrives → `TRAP_SIGNAL` atomic set → main loop checks flag → looks up handler → tokenizes, parses, executes → flag reset.
+Signal arrives → `TRAP_SIGNAL` set → main loop checks flag → looks up handler → tokenizes, parses, executes → flag reset.
 
 ---
 </details>
 
-<details>
-<summary>License</summary>
+## Credits
+
+**`[Context]`** is part of the **`[Cudane]`** ecosystem.
+
+- **`[Cudane]`** — The Distribution.
+- **`[MCX]`** — Package Manager.
 
 ## License
-**MIT License** ─ See [[**`LICENSE`**](https://github.com/Mapuse/.github/blob/profile/LICENSE)] for More Details.
 
----
-</details>
-
-<details>
-<summary>Credits</summary>
-
-- **`Cudane`** — The Distribution.
-- **`MCX`** — Package Manager.
-
----
-</details>
+**MIT License** ─ See [**`[LICENSE]`**](https://github.com/Mapuse/.github/blob/profile/LICENSE) for More Details.

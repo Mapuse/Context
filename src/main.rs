@@ -62,7 +62,7 @@ fn main() {
         std::process::exit(0);
     }
     if opts.authors {
-        eprintln!("context shell authors");
+        eprintln!("ctx shell authors");
         std::process::exit(0);
     }
     if opts.verbose_version {
@@ -82,7 +82,7 @@ fn main() {
         let cfg = config::loader::load();
         match toml::to_string_pretty(&cfg) {
             Ok(toml_str) => print!("{}", toml_str),
-            Err(e) => eprintln!("context: failed to dump config: {}", e),
+            Err(e) => eprintln!("ctx: failed to dump config: {}", e),
         }
         std::process::exit(0);
     }
@@ -136,7 +136,7 @@ fn main() {
                 command_to_run = Some(contents);
             }
             Err(e) => {
-                eprintln!("context: {}: {}", file, e);
+                eprintln!("ctx: {}: {}", file, e);
                 std::process::exit(1);
             }
         }
@@ -325,19 +325,18 @@ fn main() {
     if let Some(ref path) = opts.workdir {
         let _ = std::env::set_current_dir(path);
     }
-    if let Some(ref kv) = opts.env_var {
-        if let Some((k, v)) = kv.split_once('=') {
-            std::env::set_var(k, v);
+    if let Some(ref kv) = opts.env_var
+        && let Some((k, v)) = kv.split_once('=') {
+            unsafe { std::env::set_var(k, v); }
         }
-    }
     if let Some(ref key) = opts.unset_var {
-        std::env::remove_var(key);
+        unsafe { std::env::remove_var(key); }
     }
     if opts.xtrace {
         cfg.editor.colorize_output = true;
     }
     if let Some(ref f) = opts.log_file {
-        eprintln!("context: logging to {}", f);
+        eprintln!("ctx: logging to {}", f);
     }
     if let Some(ref ch) = opts.prompt_char {
         cfg.symbols.prompt_char = ch.clone();
@@ -349,7 +348,7 @@ fn main() {
         cfg.startup.startup_delay_ms = delay as u32;
     }
     if opts.benchmark {
-        eprintln!("context: benchmark mode");
+        eprintln!("ctx: benchmark mode");
     }
 
     let effective_color_mode = if cfg.modes.color_depth != "true_color" {
@@ -409,7 +408,7 @@ fn main() {
     py_engine.plugins.fire("on_startup", &std::collections::HashMap::new());
 
     if py_engine.plugins.count() > 0 {
-        eprintln!("context: loaded {} python plugin(s): {}", py_engine.plugins.count(), py_engine.plugins.names().join(", "));
+        eprintln!("ctx: loaded {} python plugin(s): {}", py_engine.plugins.count(), py_engine.plugins.names().join(", "));
     }
 
     if py_engine.tui_mode {
@@ -430,10 +429,10 @@ fn main() {
                 py_engine.plugins.fire("on_exit", &std::collections::HashMap::new());
                 std::process::exit(if tui_ok { 0 } else { 1 });
             } else {
-                eprintln!("context: tui_mode enabled but theme has no run() function");
+                eprintln!("ctx: tui_mode enabled but theme has no run() function");
             }
         } else {
-            eprintln!("context: tui_mode enabled but no theme loaded");
+            eprintln!("ctx: tui_mode enabled but no theme loaded");
         }
     }
 
@@ -464,15 +463,13 @@ fn main() {
                 libc::SIGUSR2 => "SIGUSR2",
                 _ => "",
             };
-            if !sig_name.is_empty() {
-                if let Some(cmd) = executor.env.get_trap(sig_name).map(|s| s.to_string()) {
-                    if !cmd.is_empty() {
+            if !sig_name.is_empty()
+                && let Some(cmd) = executor.env.get_trap(sig_name).map(|s| s.to_string())
+                    && !cmd.is_empty() {
                         let tokens = shell::lexer::tokenize(&cmd);
                         let ast = shell::parser::parse(tokens);
                         executor.execute(&ast);
                     }
-                }
-            }
         }
 
         if signals::SHOULD_EXIT.load(Ordering::SeqCst) {
@@ -693,9 +690,9 @@ fn load_history(path: &std::path::Path, max_lines: u32) -> Vec<String> {
 
 fn load_history_with_expiry(path: &std::path::Path, expire_days: u32, max_lines: u32) -> Vec<String> {
     let mut entries = load_history(path, max_lines);
-    if expire_days > 0 {
-        if let Ok(meta) = std::fs::metadata(path) {
-            if let Ok(modified) = meta.modified() {
+    if expire_days > 0
+        && let Ok(meta) = std::fs::metadata(path)
+            && let Ok(modified) = meta.modified() {
                 let elapsed = modified.elapsed().unwrap_or_default();
                 let max_age = std::time::Duration::from_secs(expire_days as u64 * 86400);
                 if elapsed > max_age {
@@ -705,8 +702,6 @@ fn load_history_with_expiry(path: &std::path::Path, expire_days: u32, max_lines:
                     }
                 }
             }
-        }
-    }
     entries
 }
 
@@ -800,13 +795,12 @@ fn load_keybindings() -> std::collections::HashMap<String, String> {
     let bindings_dir = config::loader::config_dir().join("keybindings");
     if let Ok(entries) = std::fs::read_dir(&bindings_dir) {
         for entry in entries.flatten() {
-            if let Some(name) = entry.file_name().to_str() {
-                if let Ok(widget) = std::fs::read_to_string(entry.path()) {
+            if let Some(name) = entry.file_name().to_str()
+                && let Ok(widget) = std::fs::read_to_string(entry.path()) {
                     let widget = widget.trim().to_string();
                     let key = name.replace('_', " ");
                     bindings.insert(key, widget);
                 }
-            }
         }
     }
     bindings
@@ -1025,7 +1019,7 @@ impl CliOptions {
                 "-I" | "--no-interactive" => opts.no_interactive = true,
                 "-b" | "--bash" => opts.bash_compat = true,
                 "-q" | "--quiet" => opts.quiet = true,
-                "-Q" | "--verbose" => opts.verbose = true,
+                "-Q" => opts.verbose = true,
                 "-d" | "--debug" => opts.debug = true,
                 "-t" | "--trace" => opts.trace = true,
                 "-x" | "--xtrace" => opts.xtrace = true,

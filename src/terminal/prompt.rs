@@ -453,10 +453,10 @@ fn render_middle(env: &Env, cfg: &Config) -> String {
     let host_color = hex_to_ansi(&cfg.prompt.color_host);
     let user = env.user();
     let hostname = env.hostname();
-    let result = formatted
+    
+    formatted
         .replace(&user, &format!("{}{}{}", user_color, user, reset()))
-        .replace(&hostname, &format!("{}{}{}", host_color, hostname, reset()));
-    result
+        .replace(&hostname, &format!("{}{}{}", host_color, hostname, reset()))
 }
 
 pub fn shorten_cwd(cwd: &str, home: &str, max_depth: u32) -> String {
@@ -906,11 +906,10 @@ impl PromptCache {
     pub fn get_or_compute(&self, env: &Env, cfg: &Config, last_status: i32) -> PromptDisplay {
         {
             let cache = self.cached_prompt.lock().unwrap_or_else(|e| e.into_inner());
-            if let Some((ref prompt, time, cached_status)) = *cache {
-                if time.elapsed() < self.cache_duration && cached_status == last_status {
+            if let Some((ref prompt, time, cached_status)) = *cache
+                && time.elapsed() < self.cache_duration && cached_status == last_status {
                     return prompt.clone();
                 }
-            }
         }
         let prompt = render_prompt(env, cfg, last_status);
         let mut cache = self.cached_prompt.lock().unwrap_or_else(|e| e.into_inner());

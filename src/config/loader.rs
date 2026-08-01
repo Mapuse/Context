@@ -41,11 +41,10 @@ pub fn rc_path() -> PathBuf {
 
 pub fn history_path(cfg: &Config) -> PathBuf {
     let raw = &cfg.history.file;
-    if raw.starts_with("~/") || raw.starts_with("~\\") {
-        if let Some(home) = dirs::home_dir() {
+    if (raw.starts_with("~/") || raw.starts_with("~\\"))
+        && let Some(home) = dirs::home_dir() {
             return home.join(&raw[2..]);
         }
-    }
     if Path::new(raw).is_absolute() {
         return PathBuf::from(raw);
     }

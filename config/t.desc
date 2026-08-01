@@ -1,0 +1,30 @@
+# Context Theme Descriptor
+# Register themes for the Context shell.
+# Each [theme.<id>] section defines one theme.
+# - name:  display name (shown in `context --theme list`)
+# - path:  path to the Python theme file (absolute or ~ expanded)
+# - description: optional human-readable description
+#
+# A theme file is a single .py module that may define:
+#   render_prompt(**context)       -> dict | str
+#   render_right_prompt(**context) -> str
+#   run()                          -> bool   (TUI mode)
+#
+# Context dict keys: cwd, user, host, exit_code, git_branch,
+# shell_version, shell_name, terminal_width, terminal_height,
+# and all env vars prefixed with env_.
+
+[theme.context]
+name = "Context"
+path = "./themes/context.py"
+description = "Default Context theme — cyan accent, git-aware, multi-line capable"
+
+[theme.powerline]
+name = "Powerline"
+path = "./themes/powerline.py"
+description = "Powerline-style prompt with git branch and exit status"
+
+[theme.minimal]
+name = "Minimal"
+path = "./themes/minimal.py"
+description = "Minimal single-line prompt with exit-code indicator"

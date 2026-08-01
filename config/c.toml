@@ -5,7 +5,7 @@
 # ── History ────────────────────────────────────────────────────
 [history]
 max_size = 256
-file = "~/.ctx_history"
+file = "~/.ctx/.history"
 deduplicate = true
 ignore_space = true
 ignore_patterns = []

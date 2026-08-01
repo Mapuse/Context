@@ -31,13 +31,12 @@ impl<'a> Expander<'a> {
         let mut i = 0;
 
 
-        if len >= 2 && chars[0] == '\x01' {
-            if let Some(_end) = chars[1..].iter().position(|&c| c == '\x01') {
+        if len >= 2 && chars[0] == '\x01'
+            && let Some(_end) = chars[1..].iter().position(|&c| c == '\x01') {
                 let inner = &word[1..word.len() - 1];
                 let expanded = self.expand_word(inner);
                 return format!("\x01{}\x01", expanded);
             }
-        }
 
         while i < len {
             if chars[i] == '$' && i + 1 < len {
@@ -72,7 +71,7 @@ impl<'a> Expander<'a> {
                     '$' => { result.push_str(&std::process::id().to_string()); i += 1; }
                     '!' => { result.push_str(&self.background_pid.to_string()); i += 1; }
                     '0'..='9' => {
-                        let idx = chars[i].to_digit(10).unwrap() as usize;
+                        let idx = chars[i].to_digit(10).expect("digit 0-9") as usize;
                         if idx < self.positional.len() {
                             result.push_str(&self.positional[idx]);
                         }
@@ -161,7 +160,7 @@ impl<'a> Expander<'a> {
                 let mut c_ptrs: Vec<*const libc::c_char> = c_args.iter().map(|s| s.as_ptr()).collect();
                 c_ptrs.push(std::ptr::null());
                 let cmd_path = self.find_in_path(&args[0]).unwrap_or_else(|| args[0].clone());
-                let c_cmd = std::ffi::CString::new(cmd_path).unwrap_or_else(|_| std::ffi::CString::new("sh").unwrap());
+                let c_cmd = std::ffi::CString::new(cmd_path).unwrap_or_else(|_| std::ffi::CString::new("sh").expect("failed to create CString for sh"));
                 unsafe { libc::execvp(c_cmd.as_ptr(), c_ptrs.as_ptr()); }
                 std::process::exit(127);
             }
@@ -215,11 +214,10 @@ impl<'a> Expander<'a> {
         if var.is_empty() {
             return String::new();
         }
-        if let Some(name) = var.strip_prefix('!') {
-            if !name.is_empty() {
+        if let Some(name) = var.strip_prefix('!')
+            && !name.is_empty() {
                 return self.env.get(name).unwrap_or("").to_string();
             }
-        }
         if let Some(name) = var.strip_prefix('#') {
             if name.is_empty() {
                 return self.positional.len().to_string();
@@ -493,8 +491,8 @@ fn glob_match_inner(pattern: &[char], text: &[char]) -> bool {
     if pattern[0] == '?' || pattern[0] == text[0] {
         return glob_match_inner(&pattern[1..], &text[1..]);
     }
-    if pattern[0] == '[' {
-        if let Some(close) = pattern[1..].iter().position(|&c| c == ']') {
+    if pattern[0] == '['
+        && let Some(close) = pattern[1..].iter().position(|&c| c == ']') {
             let class = &pattern[2..close + 1];
             let negate = !class.is_empty() && (class[0] == '^' || class[0] == '!');
             let class_chars = if negate { &class[1..] } else { class };
@@ -518,7 +516,6 @@ fn glob_match_inner(pattern: &[char], text: &[char]) -> bool {
             return if negate { !matches } else { matches }
                 && glob_match_inner(&pattern[close + 2..], &text[1..]);
         }
-    }
     false
 }
 

@@ -47,12 +47,11 @@ impl Executor {
             unsafe { libc::umask(mask as libc::mode_t); }
         }
 
-        if cfg.security.sanitize_path {
-            if let Ok(path) = std::env::var("PATH") {
+        if cfg.security.sanitize_path
+            && let Ok(path) = std::env::var("PATH") {
                 let sanitized: String = path.split(':').filter(|s| !s.is_empty()).collect::<Vec<_>>().join(":");
-                std::env::set_var("PATH", &sanitized);
+                unsafe { std::env::set_var("PATH", &sanitized); }
             }
-        }
 
         let mut env = env;
         let default_keys: Vec<String> = cfg.environment.set_defaults.iter()
@@ -84,13 +83,12 @@ impl Executor {
 
     pub fn run_source_rc(&mut self) {
         let rc = crate::config::loader::rc_path();
-        if rc.is_file() {
-            if let Ok(contents) = std::fs::read_to_string(&rc) {
+        if rc.is_file()
+            && let Ok(contents) = std::fs::read_to_string(&rc) {
                 let tokens = crate::shell::lexer::tokenize(&contents);
                 let ast = crate::shell::parser::parse(tokens);
                 self.execute(&ast);
             }
-        }
     }
 
     pub fn run_integrations(&mut self) {
@@ -114,12 +112,11 @@ impl Executor {
             }
         }
 
-        if cfg.integration.enable_zoxide && cfg.integration.zoxide_init {
-            if let Ok(output) = std::process::Command::new("zoxide")
+        if cfg.integration.enable_zoxide && cfg.integration.zoxide_init
+            && let Ok(output) = std::process::Command::new("zoxide")
                 .args(["init", "context"])
                 .output()
-            {
-                if output.status.success() {
+                && output.status.success() {
                     let init_script = String::from_utf8_lossy(&output.stdout).to_string();
                     if !init_script.is_empty() {
                         let tokens = crate::shell::lexer::tokenize(&init_script);
@@ -127,23 +124,18 @@ impl Executor {
                         self.execute(&ast);
                     }
                 }
-            }
-        }
 
         if cfg.integration.starship_prompt
-            && self.find_in_path("starship").is_some() {
-                if let Ok(output) = std::process::Command::new("starship")
+            && self.find_in_path("starship").is_some()
+                && let Ok(output) = std::process::Command::new("starship")
                     .args(["init", "bash"])
                     .output()
-                {
-                    if output.status.success() {
+                    && output.status.success() {
                         let init_script = String::from_utf8_lossy(&output.stdout).to_string();
                         let tokens = crate::shell::lexer::tokenize(&init_script);
                         let ast = crate::shell::parser::parse(tokens);
                         self.execute(&ast);
                     }
-                }
-            }
     }
 
     pub fn execute(&mut self, node: &Node) -> i32 {
@@ -359,13 +351,11 @@ impl Executor {
                     let words = if words[0] == "kill" {
                         let mut resolved = words.clone();
                         for arg in resolved.iter_mut().skip(2) {
-                            if let Some(job_id_str) = arg.strip_prefix('%') {
-                                if let Ok(job_id) = job_id_str.parse::<usize>() {
-                                    if let Some(job) = self.jobs.iter().find(|j| j.id == job_id) {
+                            if let Some(job_id_str) = arg.strip_prefix('%')
+                                && let Ok(job_id) = job_id_str.parse::<usize>()
+                                    && let Some(job) = self.jobs.iter().find(|j| j.id == job_id) {
                                         *arg = job.pid.to_string();
                                     }
-                                }
-                            }
                         }
                         resolved
                     } else {
@@ -688,13 +678,12 @@ impl Executor {
                             let line = line.trim().to_string();
                             if line.is_empty() { continue; }
                             if line == "EOF" || line == "quit" || line == "exit" { break; }
-                            if let Ok(n) = line.parse::<usize>() {
-                                if n > 0 && n <= iter_values.len() {
+                            if let Ok(n) = line.parse::<usize>()
+                                && n > 0 && n <= iter_values.len() {
                                     self.env.set(var, &iter_values[n - 1]);
                                     last = self.execute(body);
                                     break;
                                 }
-                            }
                             eprintln!("context: select: invalid selection");
                         }
                         Err(_) => break,
@@ -727,7 +716,7 @@ impl Executor {
             let hook = &self.cfg.execution.command_not_found_hook;
             if !hook.is_empty() {
                 use std::process::Command;
-                let status = Command::new(&hook)
+                let status = Command::new(hook)
                     .arg(cmd)
                     .status();
                 return match status {
@@ -778,7 +767,7 @@ impl Executor {
             let mut env_ptrs: Vec<*mut libc::c_char> = env_vars.iter_mut().map(|s| s.as_ptr() as *mut libc::c_char).collect();
             env_ptrs.push(std::ptr::null_mut());
 
-            let c_path = CString::new(path.as_str()).unwrap_or_else(|_| CString::new("sh").unwrap());
+            let c_path = CString::new(path.as_str()).unwrap_or_else(|_| CString::new("sh").expect("failed to create CString for sh"));
 
             let mut file_actions: libc::posix_spawn_file_actions_t = unsafe { std::mem::zeroed() };
             let mut attr: libc::posix_spawnattr_t = unsafe { std::mem::zeroed() };
@@ -992,13 +981,11 @@ impl Executor {
         if self.cfg.execution.strip_env_on_exec {
             unsafe { libc::clearenv(); }
         }
-        if self.cfg.execution.bash_compat {
-            if let Ok(ck) = CString::new("BASH_COMPAT") {
-                if let Ok(cv) = CString::new("5.2") {
+        if self.cfg.execution.bash_compat
+            && let Ok(ck) = CString::new("BASH_COMPAT")
+                && let Ok(cv) = CString::new("5.2") {
                     unsafe { libc::setenv(ck.as_ptr(), cv.as_ptr(), 1); }
                 }
-            }
-        }
         let passthrough: Vec<String> = self.cfg.environment.passthrough.to_vec();
         let filter: Vec<String> = self.cfg.environment.filter.to_vec();
         for (k, v) in self.env.passthrough_env(&passthrough, &filter) {
@@ -1016,7 +1003,7 @@ impl Executor {
             .collect();
         let mut c_ptrs: Vec<*const libc::c_char> = c_args.iter().map(|s| s.as_ptr()).collect();
         c_ptrs.push(std::ptr::null());
-        let c_cmd = CString::new(path).unwrap_or_else(|_| CString::new("sh").unwrap());
+        let c_cmd = CString::new(path).unwrap_or_else(|_| CString::new("sh").expect("failed to create CString for sh"));
         unsafe { libc::execvp(c_cmd.as_ptr(), c_ptrs.as_ptr()); }
         std::process::exit(126);
     }
@@ -1482,8 +1469,8 @@ fn glob_match_inner(pattern: &[char], text: &[char]) -> bool {
     if pattern[0] == '?' || pattern[0] == text[0] {
         return glob_match_inner(&pattern[1..], &text[1..]);
     }
-    if pattern[0] == '[' {
-        if let Some(close) = pattern[1..].iter().position(|&c| c == ']') {
+    if pattern[0] == '['
+        && let Some(close) = pattern[1..].iter().position(|&c| c == ']') {
             let class = &pattern[2..close + 1];
             let negate = !class.is_empty() && (class[0] == '^' || class[0] == '!');
             let class_chars = if negate { &class[1..] } else { class };
@@ -1507,7 +1494,6 @@ fn glob_match_inner(pattern: &[char], text: &[char]) -> bool {
             return if negate { !matches } else { matches }
                 && glob_match_inner(&pattern[close + 2..], &text[1..]);
         }
-    }
     false
 }
 
@@ -1611,13 +1597,12 @@ fn eval_test_primary(tokens: &[String]) -> bool {
     if tokens[0] == "!" {
         return !eval_test_primary(&tokens[1..]);
     }
-    if tokens[0] == "(" {
-        if let Some(close) = find_matching_paren(tokens) {
+    if tokens[0] == "("
+        && let Some(close) = find_matching_paren(tokens) {
             let inner = &tokens[1..close];
             let result = eval_test_or(inner);
             return result;
         }
-    }
     if tokens.len() >= 2 {
         let op = &tokens[0];
         if op == "-f" { return std::path::Path::new(&tokens[1]).is_file(); }

@@ -33,25 +33,25 @@ impl PluginManager {
                 let path = expand_tilde(plugin_path);
                 let std_path = std::path::PathBuf::from(&path);
                 if !std_path.exists() {
-                    eprintln!("context: plugin not found: {}", path);
+                    eprintln!("ctx: plugin not found: {}", path);
                     continue;
                 }
                 let parent = match std_path.parent() {
                     Some(p) => p.to_str().unwrap_or(".").to_string(),
-                    None => { eprintln!("context: cannot determine parent of {}", path); continue; }
+                    None => { eprintln!("ctx: cannot determine parent of {}", path); continue; }
                 };
                 let file_stem = match std_path.file_stem().and_then(|s| s.to_str()) {
                     Some(s) => s.to_string(),
-                    None => { eprintln!("context: cannot determine name of {}", path); continue; }
+                    None => { eprintln!("ctx: cannot determine name of {}", path); continue; }
                 };
                 let _ = sys_path.call_method1("insert", (0, &parent));
                 match load_one_plugin(py, &file_stem) {
                     Some((module, hooks)) => {
-                        eprintln!("context: loaded plugin: {} (hooks: {})", file_stem, hooks.join(", "));
+                        eprintln!("ctx: loaded plugin: {} (hooks: {})", file_stem, hooks.join(", "));
                         loaded.push((file_stem, module, hooks));
                     }
                     None => {
-                        eprintln!("context: plugin {} has no hooks, skipping", file_stem);
+                        eprintln!("ctx: plugin {} has no hooks, skipping", file_stem);
                     }
                 }
             }
@@ -95,11 +95,10 @@ fn load_one_plugin(py: Python, file_stem: &str) -> Option<(PyObject, Vec<String>
     for item in dir.iter() {
         if let Ok(name) = item.extract::<String>() {
             if name.starts_with('_') { continue; }
-            if let Ok(attr) = module.getattr(name.as_str()) {
-                if callable.call1((attr,)).and_then(|r| r.extract::<bool>()).unwrap_or(false) {
+            if let Ok(attr) = module.getattr(name.as_str())
+                && callable.call1((attr,)).and_then(|r| r.extract::<bool>()).unwrap_or(false) {
                     hooks.push(name);
                 }
-            }
         }
     }
     if hooks.is_empty() { return None; }

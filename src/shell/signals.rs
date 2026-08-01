@@ -21,27 +21,27 @@ pub static SIGUSR2_ACTION: AtomicU32 = AtomicU32::new(0);
 pub static FORWARD_SIGNALS: AtomicBool = AtomicBool::new(true);
 
 unsafe fn setup_signal(sig: i32, handler: extern "C" fn(i32)) {
-    let mut sa: libc::sigaction = std::mem::zeroed();
+    let mut sa: libc::sigaction = unsafe { std::mem::zeroed() };
     sa.sa_sigaction = handler as usize;
     sa.sa_flags = libc::SA_RESTART;
-    libc::sigemptyset(&mut sa.sa_mask);
-    libc::sigaction(sig, &sa, std::ptr::null_mut());
+    unsafe { libc::sigemptyset(&mut sa.sa_mask); }
+    unsafe { libc::sigaction(sig, &sa, std::ptr::null_mut()); }
 }
 
 unsafe fn ignore_signal(sig: i32) {
-    let mut sa: libc::sigaction = std::mem::zeroed();
+    let mut sa: libc::sigaction = unsafe { std::mem::zeroed() };
     sa.sa_sigaction = libc::SIG_IGN;
     sa.sa_flags = 0;
-    libc::sigemptyset(&mut sa.sa_mask);
-    libc::sigaction(sig, &sa, std::ptr::null_mut());
+    unsafe { libc::sigemptyset(&mut sa.sa_mask); }
+    unsafe { libc::sigaction(sig, &sa, std::ptr::null_mut()); }
 }
 
 unsafe fn default_signal(sig: i32) {
-    let mut sa: libc::sigaction = std::mem::zeroed();
+    let mut sa: libc::sigaction = unsafe { std::mem::zeroed() };
     sa.sa_sigaction = libc::SIG_DFL;
     sa.sa_flags = 0;
-    libc::sigemptyset(&mut sa.sa_mask);
-    libc::sigaction(sig, &sa, std::ptr::null_mut());
+    unsafe { libc::sigemptyset(&mut sa.sa_mask); }
+    unsafe { libc::sigaction(sig, &sa, std::ptr::null_mut()); }
 }
 
 pub fn init() {

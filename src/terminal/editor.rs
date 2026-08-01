@@ -46,25 +46,25 @@ struct EditorRenderCtx<'a> {
 }
 
 fn push_undo(input: &str, cursor: usize) {
-    UNDO_STACK.lock().unwrap().push((input.to_string(), cursor));
-    REDO_STACK.lock().unwrap().clear();
+    UNDO_STACK.lock().expect("UNDO_STACK lock").push((input.to_string(), cursor));
+    REDO_STACK.lock().expect("REDO_STACK lock").clear();
 }
 
 fn undo(input: &str, cursor: usize) -> Option<(String, usize)> {
-    UNDO_STACK.lock().unwrap().pop().inspect(|_prev| {
-        REDO_STACK.lock().unwrap().push((input.to_string(), cursor));
+    UNDO_STACK.lock().expect("UNDO_STACK lock").pop().inspect(|_prev| {
+        REDO_STACK.lock().expect("REDO_STACK lock").push((input.to_string(), cursor));
     })
 }
 
 fn redo(input: &str, cursor: usize) -> Option<(String, usize)> {
-    REDO_STACK.lock().unwrap().pop().inspect(|_prev| {
-        UNDO_STACK.lock().unwrap().push((input.to_string(), cursor));
+    REDO_STACK.lock().expect("REDO_STACK lock").pop().inspect(|_prev| {
+        UNDO_STACK.lock().expect("UNDO_STACK lock").push((input.to_string(), cursor));
     })
 }
 
 fn kill_ring_push(text: &str) {
     if !text.is_empty() {
-        let mut ring = KILL_RING.lock().unwrap();
+        let mut ring = KILL_RING.lock().expect("KILL_RING lock");
         if ring.last().map(|s| s.as_str()) != Some(text) {
             ring.push(text.to_string());
         }
@@ -72,7 +72,7 @@ fn kill_ring_push(text: &str) {
 }
 
 fn kill_ring_yank() -> Option<String> {
-    KILL_RING.lock().unwrap().last().cloned()
+    KILL_RING.lock().expect("KILL_RING lock").last().cloned()
 }
 
 fn format_key(code: KeyCode, modifiers: KeyModifiers) -> String {
@@ -135,7 +135,7 @@ fn parse_key_spec(spec: &str) -> (KeyModifiers, KeyCode) {
         "PageUp" => KeyCode::PageUp,
         "PageDown" => KeyCode::PageDown,
         "Esc" | "Escape" => KeyCode::Esc,
-        c if c.len() == 1 => KeyCode::Char(c.chars().next().unwrap()),
+        c if c.len() == 1 => KeyCode::Char(c.chars().next().expect("len==1 char")),
         _ => KeyCode::Esc,
     };
     (mods, code)
@@ -412,9 +412,8 @@ fn exec_widget(widget: &str, input: &mut String, cursor_pos: &mut usize, history
             if history_offset.is_none() {
                 *temp_buf = input.clone();
                 *history_offset = Some(0);
-            } else if let Some(ref mut idx) = *history_offset {
-                if *idx < history.len().saturating_sub(1) { *idx += 1; }
-            }
+            } else if let Some(ref mut idx) = *history_offset
+                && *idx < history.len().saturating_sub(1) { *idx += 1; }
             if let Some(idx) = *history_offset {
                 let hi = history.len().saturating_sub(1 + idx);
                 if hi < history.len() {
@@ -427,7 +426,7 @@ fn exec_widget(widget: &str, input: &mut String, cursor_pos: &mut usize, history
             if let Some(idx) = *history_offset {
                 if idx > 0 {
                     *history_offset = Some(idx - 1);
-                    let hi = history.len().saturating_sub(1 + history_offset.unwrap());
+                    let hi = history.len().saturating_sub(1 + history_offset.expect("history_offset Some"));
                     *input = history[hi].clone();
                     *cursor_pos = input.chars().count();
                 } else {
@@ -1177,11 +1176,10 @@ pub fn read_line_editor(
                                 if history_offset.is_none() {
                                     temp_buf = input.clone();
                                     history_offset = Some(0);
-                                } else if let Some(ref mut idx) = history_offset {
-                                    if *idx < history.len().saturating_sub(1) {
+                                } else if let Some(ref mut idx) = history_offset
+                                    && *idx < history.len().saturating_sub(1) {
                                         *idx += 1;
                                     }
-                                }
                                 if let Some(idx) = history_offset {
                                     let hi = history.len().saturating_sub(1 + idx);
                                     if hi < history.len() {
@@ -1195,7 +1193,7 @@ pub fn read_line_editor(
                                 if let Some(idx) = history_offset {
                                     if idx > 0 {
                                         history_offset = Some(idx - 1);
-                                        let hi = history.len().saturating_sub(1 + history_offset.unwrap());
+                                        let hi = history.len().saturating_sub(1 + history_offset.expect("history_offset Some"));
                                         input = history[hi].clone();
                                         cursor_pos = input.chars().count();
                                     } else {

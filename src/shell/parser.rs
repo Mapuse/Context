@@ -120,12 +120,11 @@ impl Parser {
 
     fn parse_pipeline(&mut self) -> Node {
         let mut bang = false;
-        if let Token::Word(ref w) = self.peek() {
-            if w == "!" {
+        if let Token::Word(w) = self.peek()
+            && w == "!" {
                 self.advance();
                 bang = true;
             }
-        }
         let first = self.parse_command();
         let mut commands = vec![first];
         while matches!(self.peek(), Token::Pipe) {
@@ -274,8 +273,8 @@ impl Parser {
             match self.peek() {
                 Token::Word(_) | Token::SingleQuoted(_) | Token::DoubleQuoted(_) | Token::Backtick(_) => {
 
-                    if let Token::Word(ref w) = self.peek() {
-                        if let Ok(fd_num) = w.parse::<u32>() {
+                    if let Token::Word(w) = self.peek()
+                        && let Ok(fd_num) = w.parse::<u32>() {
                             let saved = self.pos;
                             self.advance();
                             if matches!(self.peek(),
@@ -283,15 +282,12 @@ impl Parser {
                                 | Token::LessLess | Token::LessLessLess | Token::LessAmp
                                 | Token::AmpGreater | Token::AmpGreaterGreater
                                 | Token::GreaterPipe | Token::GreaterAmp)
-                            {
-                                if let Some(r) = self.parse_redirect_with_fd(Some(fd_num)) {
+                                && let Some(r) = self.parse_redirect_with_fd(Some(fd_num)) {
                                     redirects.push(r);
                                     continue;
                                 }
-                            }
                             self.pos = saved;
                         }
-                    }
                     if let Some(w) = self.expect_word_quoted() {
                         words.push(w);
                     }
@@ -319,15 +315,14 @@ impl Parser {
         let mut assignments = Vec::new();
         let mut cmd_start = 0;
         for (i, w) in words.iter().enumerate() {
-            if let Some(eq_pos) = w.find('=') {
-                if eq_pos > 0 && !w.starts_with('=') {
+            if let Some(eq_pos) = w.find('=')
+                && eq_pos > 0 && !w.starts_with('=') {
                     let name = w[..eq_pos].to_string();
                     let value = w[eq_pos + 1..].to_string();
                     assignments.push(Node::Assignment { name, value });
                     cmd_start = i + 1;
                     continue;
                 }
-            }
             break;
         }
         words = words[cmd_start..].to_vec();

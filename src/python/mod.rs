@@ -1,5 +1,6 @@
 pub mod theme;
 pub mod plugin;
+pub mod tui;
 
 use std::sync::Once;
 use pyo3::prelude::*;
@@ -9,6 +10,7 @@ static INIT: Once = Once::new();
 
 pub struct PythonEngine {
     pub theme: Option<theme::ThemeEngine>,
+    pub tui: Option<tui::TuiEngine>,
     pub plugins: plugin::PluginManager,
     pub tui_mode: bool,
 }
@@ -16,7 +18,7 @@ pub struct PythonEngine {
 impl PythonEngine {
     pub fn new(cfg: &PythonConfig) -> Self {
         if !cfg.enabled {
-            return Self { theme: None, plugins: plugin::PluginManager::new(), tui_mode: false };
+            return Self { theme: None, tui: None, plugins: plugin::PluginManager::new(), tui_mode: false };
         }
         INIT.call_once(|| {
             let _ = std::panic::catch_unwind(|| {
@@ -24,8 +26,8 @@ impl PythonEngine {
             });
         });
         if !Python::with_gil(|_| true) {
-            eprintln!("context: python engine unavailable, falling back to native");
-            return Self { theme: None, plugins: plugin::PluginManager::new(), tui_mode: false };
+            eprintln!("ctx: python engine unavailable, falling back to native");
+            return Self { theme: None, tui: None, plugins: plugin::PluginManager::new(), tui_mode: false };
         }
         if !cfg.venv_path.is_empty() {
             activate_venv(&cfg.venv_path);
@@ -34,30 +36,36 @@ impl PythonEngine {
             theme::ThemeEngine::load(cfg)
         }))
         .unwrap_or_else(|e| {
-            eprintln!("context: python theme failed to load: {:?}", e);
+            eprintln!("ctx: python theme failed to load: {:?}", e);
+            None
+        });
+        let tui = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            tui::TuiEngine::load(cfg)
+        }))
+        .unwrap_or_else(|e| {
+            eprintln!("ctx: python tui failed to load: {:?}", e);
             None
         });
         let mut plugins = plugin::PluginManager::new();
         let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             plugins.load_all(cfg);
         }));
-        Self { theme, plugins, tui_mode: cfg.tui_mode }
+        Self { theme, tui, plugins, tui_mode: cfg.tui_mode }
     }
 }
 
 pub fn expand_tilde(path: &str) -> String {
-    if path.starts_with('~') {
-        if let Ok(home) = std::env::var("HOME") {
+    if path.starts_with('~')
+        && let Ok(home) = std::env::var("HOME") {
             return path.replacen('~', &home, 1);
         }
-    }
     path.to_string()
 }
 
 fn activate_venv(path_str: &str) {
     let venv = std::path::PathBuf::from(expand_tilde(path_str));
     if !venv.exists() {
-        eprintln!("context: venv not found: {}", venv.display());
+        eprintln!("ctx: venv not found: {}", venv.display());
         return;
     }
     let _ = Python::with_gil(|py| -> PyResult<()> {
@@ -83,11 +91,11 @@ fn activate_venv(path_str: &str) {
         for p in &candidates {
             if p.exists() {
                 sys_path.call_method1("insert", (0, p.to_str().unwrap_or_default()))?;
-                eprintln!("context: activated venv: {} (site-packages: {})", venv.display(), p.display());
+                eprintln!("ctx: activated venv: {} (site-packages: {})", venv.display(), p.display());
                 return Ok(());
             }
         }
-        eprintln!("context: venv site-packages not found in: {}", venv.display());
+        eprintln!("ctx: venv site-packages not found in: {}", venv.display());
         Ok(())
     });
 }

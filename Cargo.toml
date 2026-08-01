@@ -1,12 +1,16 @@
 [package]
 name = "context"
 version = "0.70.0"
-edition = "2021"
-description = "A fast, fully configurable POSIX shell"
+edition = "2024"
+description = "A fast, fully configurable POSIX shell for Cudane"
 
 [features]
 default = ["python"]
 python = ["pyo3"]
+
+[[bin]]
+name = "ctx"
+path = "src/main.rs"
 
 [dependencies]
 crossterm = "0.28"

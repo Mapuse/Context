@@ -31,11 +31,10 @@ pub enum ColorCapability {
 }
 
 pub fn detect_color_capability() -> ColorCapability {
-    if let Ok(ct) = std::env::var("COLORTERM") {
-        if ct == "truecolor" || ct == "24bit" {
+    if let Ok(ct) = std::env::var("COLORTERM")
+        && (ct == "truecolor" || ct == "24bit") {
             return ColorCapability::TrueColor;
         }
-    }
     if let Ok(term) = std::env::var("TERM") {
         if term.contains("256color") { return ColorCapability::Color256; }
         if term == "dumb" || term.is_empty() { return ColorCapability::NoColor; }

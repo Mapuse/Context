@@ -4,11 +4,10 @@ use std::path::Path;
 use std::process::Command;
 
 fn expand_tilde(path: &str) -> String {
-    if path.starts_with('~') {
-        if let Some(home) = dirs::home_dir() {
+    if path.starts_with('~')
+        && let Some(home) = dirs::home_dir() {
             return path.replacen('~', &home.to_string_lossy(), 1);
         }
-    }
     path.to_string()
 }
 
@@ -29,16 +28,14 @@ fn detect_wallpaper_path() -> Option<String> {
         }
     }
 
-    if let Ok(o) = Command::new("swaymsg").args(["-t", "get_outputs"]).output() {
-        if let Ok(v) = serde_json::from_slice::<serde_json::Value>(&o.stdout) {
-            if let Some(path) = v.get(0).and_then(|o| o.get("current_wallpaper")).and_then(|v| v.as_str()) {
+    if let Ok(o) = Command::new("swaymsg").args(["-t", "get_outputs"]).output()
+        && let Ok(v) = serde_json::from_slice::<serde_json::Value>(&o.stdout)
+            && let Some(path) = v.get(0).and_then(|o| o.get("current_wallpaper")).and_then(|v| v.as_str()) {
                 let path = expand_tilde(path);
                 if std::path::Path::new(&path).exists() {
                     return Some(path);
                 }
             }
-        }
-    }
 
     for key in &["picture-uri-dark", "picture-uri"] {
         if let Ok(o) = Command::new("gsettings")
@@ -116,8 +113,8 @@ fn query_terminal_bg() -> Vec<String> {
 
     let start = std::time::Instant::now();
     while start.elapsed() < Duration::from_millis(100) {
-        if let Ok(n) = handle.read(&mut buf) {
-            if n > 0 {
+        if let Ok(n) = handle.read(&mut buf)
+            && n > 0 {
                 let s = String::from_utf8_lossy(&buf[..n]);
                 if let Some(idx) = s.find("\x1b]11;") {
                     let rest = &s[idx + 5..];
@@ -127,7 +124,6 @@ fn query_terminal_bg() -> Vec<String> {
                     }
                 }
             }
-        }
     }
 
     fallback_palette()

@@ -33,7 +33,7 @@ impl Env {
             .and_then(|s| s.parse().ok())
             .unwrap_or(0) + 1;
         vars.insert("SHLVL".to_string(), shlvl.to_string());
-        std::env::set_var("SHLVL", shlvl.to_string());
+        unsafe { std::env::set_var("SHLVL", shlvl.to_string()); }
         Self {
             vars,
             exported,
@@ -68,7 +68,7 @@ impl Env {
         }
         self.vars.insert(key.to_string(), value.to_string());
         if !is_internal(key) {
-            std::env::set_var(key, value);
+            unsafe { std::env::set_var(key, value); }
         }
     }
 
@@ -76,17 +76,16 @@ impl Env {
         self.vars.insert(key.to_string(), value.to_string());
         self.exported.insert(key.to_string(), export);
         if !is_internal(key) {
-            std::env::set_var(key, value);
+            unsafe { std::env::set_var(key, value); }
         }
     }
 
     pub fn export(&mut self, key: &str) {
         self.exported.insert(key.to_string(), true);
-        if !is_internal(key) {
-            if let Some(val) = self.vars.get(key).cloned() {
-                std::env::set_var(key, &val);
+        if !is_internal(key)
+            && let Some(val) = self.vars.get(key).cloned() {
+                unsafe { std::env::set_var(key, &val); }
             }
-        }
     }
 
     pub fn unset(&mut self, key: &str) {
@@ -97,7 +96,7 @@ impl Env {
         self.vars.remove(key);
         self.exported.remove(key);
         if !is_internal(key) {
-            std::env::remove_var(key);
+            unsafe { std::env::remove_var(key); }
         }
     }
 
@@ -334,7 +333,7 @@ impl Env {
             self.vars.remove(&key);
             self.exported.remove(&key);
             if !is_internal(&key) {
-                std::env::remove_var(&key);
+                unsafe { std::env::remove_var(&key); }
             }
         }
     }

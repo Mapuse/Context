@@ -5,11 +5,10 @@ use crate::terminal::color::*;
 use super::prompt::{resolve_border_chars, expand_prompt_vars};
 
 fn expand_tilde(path: &str) -> String {
-    if path.starts_with("~/") {
-        if let Ok(home) = std::env::var("HOME") {
+    if path.starts_with("~/")
+        && let Ok(home) = std::env::var("HOME") {
             return format!("{}{}", home, &path[1..]);
         }
-    }
     path.to_string()
 }
 
@@ -204,7 +203,7 @@ pub fn render_startup(cfg: &Config, env: &Env) -> String {
                     print!("{}", rendered);
                     let _ = std::io::stdout().flush();
                     std::thread::sleep(delay);
-                    if frame != frames.last().unwrap() {
+                    if frame != frames.last().expect("frames non-empty") {
                         print!("\x1b[{}A", total_height);
                         let _ = std::io::stdout().flush();
                     }

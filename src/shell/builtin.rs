@@ -98,14 +98,12 @@ fn cmd_cd(args: &[String], env: &mut Env, cfg: &Config) -> BuiltinResult {
         env.get("OLDPWD")
             .unwrap_or(&env.home())
             .to_string()
+    } else if args[0] == "~" {
+        env.home()
+    } else if let Some(rest) = args[0].strip_prefix("~/") {
+        format!("{}/{}", env.home(), rest)
     } else {
-        if args[0] == "~" {
-            env.home()
-        } else if let Some(rest) = args[0].strip_prefix("~/") {
-            format!("{}/{}", env.home(), rest)
-        } else {
-            args[0].clone()
-        }
+        args[0].clone()
     };
 
     let new_dir = Path::new(&target);
@@ -114,12 +112,11 @@ fn cmd_cd(args: &[String], env: &mut Env, cfg: &Config) -> BuiltinResult {
         .unwrap_or_default();
 
     if let Err(e) = std::env::set_current_dir(new_dir) {
-        if cfg.execution.cdspell {
-            if let Some(suggestion) = spell_correct_dir(&target, &old) {
+        if cfg.execution.cdspell
+            && let Some(suggestion) = spell_correct_dir(&target, &old) {
                 eprintln!("context: cd: {}: {}. Did you mean '{}'?", target, e, suggestion);
                 return BuiltinResult::err(1);
             }
-        }
         eprintln!("context: cd: {}: {}", target, e);
         return BuiltinResult::err(1);
     }
@@ -175,7 +172,7 @@ fn spell_correct_dir(target: &str, cwd: &str) -> Option<String> {
             match &best {
                 Some((_, best_dist)) if dist < *best_dist => {
                     let full = if target.contains('/') {
-                        let dir_part = target[..target.rfind('/').unwrap() + 1].to_string();
+                        let dir_part = target[..target.rfind('/').expect("contains '/'") + 1].to_string();
                         format!("{}{}", dir_part, name)
                     } else {
                         name.clone()
@@ -184,7 +181,7 @@ fn spell_correct_dir(target: &str, cwd: &str) -> Option<String> {
                 }
                 None => {
                     let full = if target.contains('/') {
-                        let dir_part = target[..target.rfind('/').unwrap() + 1].to_string();
+                        let dir_part = target[..target.rfind('/').expect("contains '/'") + 1].to_string();
                         format!("{}{}", dir_part, name)
                     } else {
                         name.clone()
@@ -231,14 +228,13 @@ fn cmd_export(args: &[String], env: &mut Env) -> BuiltinResult {
 
 fn cmd_unset(args: &[String], env: &mut Env) -> BuiltinResult {
     for arg in args {
-        if arg.contains('[') && arg.ends_with(']') {
-            if let Some(bracket_pos) = arg.find('[') {
+        if arg.contains('[') && arg.ends_with(']')
+            && let Some(bracket_pos) = arg.find('[') {
                 let name = &arg[..bracket_pos];
                 let key = &arg[bracket_pos + 1..].trim_end_matches(']');
                 env.assoc_unset(name, key);
                 continue;
             }
-        }
         env.unset(arg);
     }
     BuiltinResult::ok()
@@ -577,11 +573,10 @@ fn escape_echo(s: &str) -> String {
                             oct.push(chars[i]);
                             i += 1;
                         }
-                        if !oct.is_empty() {
-                            if let Ok(byte) = u8::from_str_radix(&oct, 8) {
+                        if !oct.is_empty()
+                            && let Ok(byte) = u8::from_str_radix(&oct, 8) {
                                 result.push(byte as char);
                             }
-                        }
                     }
                     continue;
                 }
@@ -1078,7 +1073,7 @@ impl ArithmeticParser {
                 let mut val: i64 = 0;
                 while let Some(ch) = self.peek() {
                     if ch.is_ascii_hexdigit() {
-                        val = val * 16 + ch.to_digit(16).unwrap() as i64;
+                        val = val * 16 + ch.to_digit(16).expect("hexdigit") as i64;
                         self.advance();
                     } else {
                         break;
@@ -1397,12 +1392,10 @@ fn cmd_dirs(args: &[String], env: &mut Env) -> BuiltinResult {
         } else {
             println!("{}", output.join(" "));
         }
+    } else if one_per_line {
+        println!("{}", entries.join("\n"));
     } else {
-        if one_per_line {
-            println!("{}", entries.join("\n"));
-        } else {
-            println!("{}", entries.join(" "));
-        }
+        println!("{}", entries.join(" "));
     }
     BuiltinResult::ok()
 }
@@ -1413,7 +1406,7 @@ fn cmd_hash(args: &[String]) -> BuiltinResult {
         LazyLock::new(|| std::sync::Mutex::new(std::collections::HashMap::new()));
 
     if args.is_empty() {
-        let cache = PATH_CACHE.lock().unwrap();
+        let cache = PATH_CACHE.lock().expect("PATH_CACHE lock");
         if cache.is_empty() {
             return BuiltinResult::ok();
         }
@@ -1427,14 +1420,14 @@ fn cmd_hash(args: &[String]) -> BuiltinResult {
     let mut i = 0;
     while i < args.len() {
         if args[i] == "-r" {
-            PATH_CACHE.lock().unwrap().clear();
+            PATH_CACHE.lock().expect("PATH_CACHE lock").clear();
             i += 1;
         } else if args[i] == "-p" {
             i += 1;
             if i < args.len() {
                 let name = &args[i];
                 if let Some(path) = find_in_path(name) {
-                    PATH_CACHE.lock().unwrap().insert(name.to_string(), path);
+                    PATH_CACHE.lock().expect("PATH_CACHE lock").insert(name.to_string(), path);
                 } else {
                     eprintln!("context: hash: {}: not found", name);
                 }
@@ -1446,7 +1439,7 @@ fn cmd_hash(args: &[String]) -> BuiltinResult {
         } else {
             let name = &args[i];
             if let Some(path) = find_in_path(name) {
-                PATH_CACHE.lock().unwrap().insert(name.to_string(), path);
+                PATH_CACHE.lock().expect("PATH_CACHE lock").insert(name.to_string(), path);
             } else {
                 eprintln!("context: hash: {}: not found", name);
             }
@@ -1714,13 +1707,12 @@ fn cmd_module(args: &[String], env: &mut Env) -> BuiltinResult {
             }
             let name = &args[1];
             let fini_path = modules_dir.join(name).join("fini.context");
-            if fini_path.exists() {
-                if let Ok(contents) = std::fs::read_to_string(&fini_path) {
+            if fini_path.exists()
+                && let Ok(contents) = std::fs::read_to_string(&fini_path) {
                     let tokens = crate::shell::lexer::tokenize(&contents);
                     let ast = crate::shell::parser::parse(tokens);
                     crate::shell::executor::Executor::new(env.clone(), crate::config::Config::default()).execute(&ast);
                 }
-            }
             println!("Module {} unloaded", name);
             BuiltinResult::ok()
         }
@@ -1801,27 +1793,24 @@ fn cmd_declare(args: &[String], env: &mut Env) -> BuiltinResult {
         if let Some(eq_pos) = var.find('=') {
             let name = &var[..eq_pos];
             let value = &var[eq_pos + 1..];
-            if assoc && name.contains('[') {
-                if let Some(bracket_pos) = name.find('[') {
+            if assoc && name.contains('[')
+                && let Some(bracket_pos) = name.find('[') {
                     let arr_name = &name[..bracket_pos];
                     let key = &name[bracket_pos + 1..].trim_end_matches(']');
                     env.create_assoc_array(arr_name);
                     env.assoc_set(arr_name, key, value);
                     continue;
                 }
-            }
             env.set_exported(name, value, export);
             if readonly {
                 env.set_readonly(name);
             }
+        } else if assoc {
+            env.create_assoc_array(var);
         } else {
-            if assoc {
-                env.create_assoc_array(var);
-            } else {
-                env.export(var);
-                if readonly {
-                    env.set_readonly(var);
-                }
+            env.export(var);
+            if readonly {
+                env.set_readonly(var);
             }
         }
     }
@@ -1904,12 +1893,11 @@ fn cmd_kill(args: &[String]) -> BuiltinResult {
             }
         };
         i = 1;
-    } else if args[0].starts_with('-') {
-        if let Ok(n) = args[0][1..].parse::<i32>() {
+    } else if args[0].starts_with('-')
+        && let Ok(n) = args[0][1..].parse::<i32>() {
             signal = n;
             i = 1;
         }
-    }
     if i >= args.len() {
         eprintln!("context: kill: usage: kill [-s SIGSPEC | -n SIGNUM | -SIGSPEC] pid | jobspec ...");
         return BuiltinResult::err(1);
@@ -1992,10 +1980,10 @@ fn cmd_command(args: &[String]) -> BuiltinResult {
     if use_posix_path {
         let posix_path = "/system/local/bin:/system/bin:/bin";
         let old_path = std::env::var("PATH").ok();
-        std::env::set_var("PATH", posix_path);
+        unsafe { std::env::set_var("PATH", posix_path); }
         let result = exec_command(&args[i..]);
         if let Some(old) = old_path {
-            std::env::set_var("PATH", &old);
+            unsafe { std::env::set_var("PATH", &old); }
         }
         result
     } else {
@@ -2027,7 +2015,7 @@ fn exec_command(args: &[String]) -> BuiltinResult {
                 .collect();
             let mut c_ptrs: Vec<*const libc::c_char> = c_args.iter().map(|s| s.as_ptr()).collect();
             c_ptrs.push(std::ptr::null());
-            let c_cmd = std::ffi::CString::new(path).unwrap_or_else(|_| std::ffi::CString::new("sh").unwrap());
+            let c_cmd = std::ffi::CString::new(path).unwrap_or_else(|_| std::ffi::CString::new("sh").expect("failed to create CString for sh"));
             unsafe { libc::execvp(c_cmd.as_ptr(), c_ptrs.as_ptr()); }
             std::process::exit(126);
         }
@@ -2074,12 +2062,11 @@ fn cmd_select(args: &[String], env: &mut Env) -> BuiltinResult {
                 let line = line.trim();
                 if line.is_empty() { continue; }
                 if line == "EOF" || line == "quit" || line == "exit" { break; }
-                if let Ok(n) = line.parse::<usize>() {
-                    if n > 0 && n <= items.len() {
+                if let Ok(n) = line.parse::<usize>()
+                    && n > 0 && n <= items.len() {
                         env.set(var_name, &items[n - 1]);
                         break;
                     }
-                }
                 eprintln!("context: select: invalid selection");
             }
             Err(_) => break,
@@ -2265,11 +2252,10 @@ fn cmd_read(args: &[String], env: &mut Env) -> BuiltinResult {
     let mut line = String::new();
     let start = std::time::Instant::now();
     loop {
-        if let Some(t) = timeout {
-            if start.elapsed().as_millis() as u64 >= t * 1000 {
+        if let Some(t) = timeout
+            && start.elapsed().as_millis() as u64 >= t * 1000 {
                 break;
             }
-        }
         let mut buf = [0u8; 1];
         match std::io::Read::read(&mut stdin.lock(), &mut buf) {
             Ok(0) => break,
@@ -2440,11 +2426,10 @@ fn cmd_bindkey(args: &[String], env: &mut Env) -> BuiltinResult {
             .join("context/keybindings");
         if let Ok(entries) = std::fs::read_dir(&bindings_dir) {
             for entry in entries.flatten() {
-                if let Some(name) = entry.file_name().to_str() {
-                    if let Some(widget) = std::fs::read_to_string(entry.path()).ok().map(|s| s.trim().to_string()) {
+                if let Some(name) = entry.file_name().to_str()
+                    && let Some(widget) = std::fs::read_to_string(entry.path()).ok().map(|s| s.trim().to_string()) {
                         println!("{} -> {}", name, widget);
                     }
-                }
             }
         } else {
             println!("no keybindings configured (use: bindkey <key> <widget>)");
@@ -2516,12 +2501,12 @@ mod tests {
         ];
         let result = run_builtin("getopts", &args, &mut env);
         assert_eq!(result.status, 0);
-        assert_eq!(env.get("OPT").unwrap(), "a");
-        assert_eq!(env.get("OPTIND").unwrap(), "2");
+        assert_eq!(env.get("OPT").expect("OPT set"), "a");
+        assert_eq!(env.get("OPTIND").expect("OPTIND set"), "2");
 
         let result2 = run_builtin("getopts", &args, &mut env);
         assert_eq!(result2.status, 1);
-        assert_eq!(env.get("OPTIND").unwrap(), "3");
+        assert_eq!(env.get("OPTIND").expect("OPTIND set"), "3");
     }
 
     #[test]
