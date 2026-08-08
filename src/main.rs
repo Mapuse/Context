@@ -1,11 +1,11 @@
 pub mod config;
 pub mod shell;
 pub mod terminal;
-pub mod python;
 
 use std::io::{self, Write, BufRead, BufReader};
 use std::fs::OpenOptions;
 use std::sync::atomic::Ordering;
+use std::sync::Arc;
 
 use crate::config::Config;
 use crate::shell::env::Env;
@@ -42,8 +42,26 @@ fn install_panic_hook() {
     }));
 }
 
+struct CtxReporter;
+
+impl cps::Reporter for CtxReporter {
+    fn info(&self, msg: &str) {
+        eprintln!("ctx: {msg}");
+    }
+    fn warning(&self, msg: &str) {
+        eprintln!("ctx: {msg}");
+    }
+    fn error(&self, msg: &str) {
+        eprintln!("ctx: {msg}");
+    }
+}
+
 fn main() {
     install_panic_hook();
+
+    cps::configure(
+        cps::Options::new("context").with_reporter(Arc::new(CtxReporter)),
+    );
 
     let args: Vec<String> = std::env::args().collect();
     let opts = CliOptions::parse(&args);
@@ -404,7 +422,7 @@ fn main() {
 
     executor.run_integrations();
 
-    let py_engine = python::PythonEngine::new(&cfg.python);
+    let py_engine = cps::PythonEngine::new(&cfg.python);
     py_engine.plugins.fire("on_startup", &std::collections::HashMap::new());
 
     if py_engine.plugins.count() > 0 {

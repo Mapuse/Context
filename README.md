@@ -219,22 +219,23 @@ All build systems auto-detect `x86_64`/`aarch64` and select the correct musl tar
 
 ```shell
 cargo build --release
-# Binary: target/release/context
+# Binary: target/release/ctx
 # Install:
-install -Dm755 target/release/context /system/bin/context
+install -Dm755 target/release/ctx /system/bin/ctx
 ```
 
 ### Make
 
 ```shell
 make build                    # auto-detects arch, builds for host
-make install                  # installs to /system/bin/context
+make install                  # installs to /system/bin/ctx
 make install DESTDIR=/mnt     # staged install
 ```
 
 ### Meson
 
 ```shell
+./gen-cross.sh                              # generate cross file for host arch
 meson setup builddir --cross-file cross.txt --prefix=/system
 meson compile -C builddir
 meson install -C builddir
@@ -244,7 +245,7 @@ meson install -C builddir
 
 ```shell
 ninja -f build.ninja                       # build
-ninja -f build.ninja install DESTDIR=/mnt  # staged install
+DESTDIR=/mnt ninja -f build.ninja install  # staged install
 ```
 
 ### CMake
@@ -322,13 +323,13 @@ cargo build --profile release-debug  # requires Cargo.toml profile
 RUST_LOG=debug context
 
 # Run with backtrace on panic
-RUST_BACKTRACE=1 context
+RUST_BACKTRACE=1 ctx
 
 # Run under strace for syscall tracing
-strace -f -o /tmp/context.strace ./target/release/context
+strace -f -o /tmp/context.strace ./target/release/ctx
 
 # Memory profiling with valgrind
-valgrind --tool=massif ./target/release/context
+valgrind --tool=massif ./target/release/ctx
 ms_print massif.out.* | less
 ```
 
@@ -336,7 +337,7 @@ ms_print massif.out.* | less
 
 ```shell
 # perf profiling (Linux)
-perf record --call-graph dwarf ./target/release/context
+perf record --call-graph dwarf ./target/release/ctx
 perf report
 
 # Generate flamegraph
@@ -344,7 +345,7 @@ perf script | inferno-collapse-perf > stacks.folded
 inferno-flamegraph stacks.folded > flamegraph.svg
 
 # CPU sampling with perf stat
-perf stat -e cycles,instructions,cache-misses,faults ./target/release/context
+perf stat -e cycles,instructions,cache-misses,faults ./target/release/ctx
 
 # Heap profiling with dhat (requires `dhat` feature)
 # Run with DHAT_VALIDATE=1 and parse dhat-heap.json

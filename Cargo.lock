@@ -339,16 +339,27 @@ checksum = "1d07550c9036bf2ae0c684c4297d503f838287c83c53686d05370d0e139ae570"
 name = "context"
 version = "0.70.0"
 dependencies = [
+ "cps",
  "crossterm",
  "dirs",
  "glob",
  "libc",
- "pyo3",
  "regex",
  "serde",
  "serde_json",
  "toml 0.8.23",
  "wallust",
+]
+
+[[package]]
+name = "cps"
+version = "0.7.0"
+source = "git+https://github.com/Mapuse/CPS?rev=d8d5f7da49917ea7636147b8a65f3541311c45ab#d8d5f7da49917ea7636147b8a65f3541311c45ab"
+dependencies = [
+ "clap",
+ "pyo3",
+ "serde",
+ "toml 0.8.23",
 ]
 
 [[package]]
