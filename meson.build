@@ -26,7 +26,7 @@ custom_target('ctx',
   build_by_default : true,
   build_always_stale : true,
   install : true,
-  install_dir : get_option('prefix') / 'bin',
+  install_dir : '/bin',
   command : ['sh', '-c',
     'CARGO_TARGET_DIR={0} cargo build --release --locked --manifest-path {1}/Cargo.toml --target {2} && cp {0}/{2}/release/ctx @OUTPUT@'
     .format(build_dir, src_dir, rust_target),

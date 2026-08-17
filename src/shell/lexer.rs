@@ -23,6 +23,7 @@ pub enum Token {
     Less,
     LessLess,
     LessLessLess,
+    LessLessDash,
     LessAmp,
     AmpGreater,
     AmpGreaterGreater,
@@ -74,6 +75,7 @@ impl fmt::Display for Token {
             Token::Less => write!(f, "<"),
             Token::LessLess => write!(f, "<<"),
             Token::LessLessLess => write!(f, "<<<"),
+            Token::LessLessDash => write!(f, "<<-"),
             Token::LessAmp => write!(f, "<&"),
             Token::AmpGreater => write!(f, "&>"),
             Token::AmpGreaterGreater => write!(f, "&>>"),
@@ -162,24 +164,123 @@ impl Lexer {
         while let Some(ch) = self.peek() {
             match ch {
                 ' ' | '\t' | '\r' | '\n' | '|' | '&' | ';' | '(' | ')' | '{' | '}'
-                | '<' | '>' | '`' | '$' => break,
+                | '<' | '>' => break,
                 '#' if word.is_empty() => {
                     self.skip_comment();
                     break;
                 }
+                '$' => word.push_str(&self.read_dollar_word()),
+                '"' => {
+                    self.advance();
+                    let s = self.read_double_quoted();
+                    word.push('\x01');
+                    word.push_str(&s);
+                    word.push('\x01');
+                }
+                '\'' => {
+                    self.advance();
+                    let s = self.read_single_quoted();
+                    word.push('\x02');
+                    word.push_str(&s);
+                    word.push('\x02');
+                }
+                '`' => {
+                    self.advance();
+                    let s = self.read_backtick();
+                    word.push('`');
+                    word.push_str(&s);
+                    word.push('`');
+                }
+                '\\' => {
+                    self.advance();
+                    if let Some(next) = self.peek() {
+                        if next == '\n' {
+                            self.advance();
+                            continue;
+                        }
+                        word.push(self.advance().unwrap());
+                    }
+                }
                 _ => {
                     self.advance();
-                    if ch == '\\' {
-                        if let Some(next) = self.advance() {
-                            word.push(next);
-                        }
-                    } else {
-                        word.push(ch);
-                    }
+                    word.push(ch);
                 }
             }
         }
         word
+    }
+
+    /// Read a `$`-expansion inline: `$var`, `${...}`, `$(...)`, `$((...))`,
+    /// `$'...'` and the special variables. The leading `$` is consumed.
+    fn read_dollar_word(&mut self) -> String {
+        self.advance();
+        let Some(ch) = self.peek() else { return "$".to_string() };
+        match ch {
+            '\'' => {
+                self.advance();
+                let s = self.read_ansi_c_quoted();
+                format!("$'{}'", s)
+            }
+            '(' => {
+                self.advance();
+                let mut sub = String::from("$(");
+                let mut depth = 1u32;
+                while let Some(c) = self.peek() {
+                    match c {
+                        '(' => { depth += 1; sub.push(c); self.advance(); }
+                        ')' => {
+                            depth -= 1;
+                            sub.push(c);
+                            self.advance();
+                            if depth == 0 { break; }
+                        }
+                        _ => { sub.push(c); self.advance(); }
+                    }
+                }
+                sub
+            }
+            '{' => {
+                self.advance();
+                let mut var = String::from("${");
+                let mut depth = 1u32;
+                while let Some(c) = self.peek() {
+                    match c {
+                        '{' => { depth += 1; var.push(c); }
+                        '}' => {
+                            var.push(c);
+                            depth -= 1;
+                            if depth == 0 {
+                                self.advance();
+                                break;
+                            }
+                        }
+                        _ => { var.push(c); }
+                    }
+                    self.advance();
+                }
+                var
+            }
+            '?' | '$' | '!' | '@' | '*' | '#' | '-' | '_' => {
+                self.advance();
+                format!("${}", ch)
+            }
+            '0'..='9' => {
+                self.advance();
+                format!("${}", ch)
+            }
+            _ => {
+                let mut var = String::from("$");
+                while let Some(ch) = self.peek() {
+                    if ch.is_alphanumeric() || ch == '_' {
+                        var.push(ch);
+                        self.advance();
+                    } else {
+                        break;
+                    }
+                }
+                var
+            }
+        }
     }
 
     fn read_single_quoted(&mut self) -> String {
@@ -199,16 +300,11 @@ impl Lexer {
             match ch {
                 '"' => return s,
                 '\\' => {
-                    if let Some(next) = self.advance() {
-                        match next {
-                            '"' | '\\' | '$' | '`' => s.push(next),
-                            '\n' => {}
-                            _ => {
-                                s.push('\\');
-                                s.push(next);
-                            }
+                    if let Some(next) = self.advance()
+                        && next != '\n' {
+                            s.push('\\');
+                            s.push(next);
                         }
-                    }
                 }
                 _ => s.push(ch),
             }
@@ -258,10 +354,11 @@ impl Lexer {
                         'e' => s.push('\x1b'),
                         'f' => s.push('\x0c'),
                         'v' => s.push('\x0b'),
-                        '0' => {
+                        '0' | '1' | '2' | '3' | '4' | '5' | '6' | '7' => {
                             let mut oct = String::new();
+                            oct.push(next);
                             while let Some(d) = self.peek() {
-                                if d.is_ascii_digit() && d <= '7' {
+                                if d.is_ascii_digit() && d <= '7' && oct.len() < 3 {
                                     oct.push(d);
                                     self.advance();
                                 } else { break; }
@@ -272,14 +369,73 @@ impl Lexer {
                         }
                         'x' => {
                             let mut hex = String::new();
+                            let mut count = 0;
                             while let Some(d) = self.peek() {
-                                if d.is_ascii_hexdigit() {
+                                if d.is_ascii_hexdigit() && count < 2 {
                                     hex.push(d);
                                     self.advance();
+                                    count += 1;
                                 } else { break; }
                             }
                             if let Ok(byte) = u8::from_str_radix(&hex, 16) {
                                 s.push(byte as char);
+                            }
+                        }
+                        'u' => {
+                            let mut hex = String::new();
+                            let mut count = 0;
+                            while let Some(d) = self.peek() {
+                                if d.is_ascii_hexdigit() && count < 4 {
+                                    hex.push(d);
+                                    self.advance();
+                                    count += 1;
+                                } else { break; }
+                            }
+                            if let Ok(code) = u32::from_str_radix(&hex, 16)
+                                && let Some(ch) = char::from_u32(code) {
+                                    s.push(ch);
+                                }
+                        }
+                        'U' => {
+                            let mut hex = String::new();
+                            let mut count = 0;
+                            while let Some(d) = self.peek() {
+                                if d.is_ascii_hexdigit() && count < 8 {
+                                    hex.push(d);
+                                    self.advance();
+                                    count += 1;
+                                } else { break; }
+                            }
+                            if let Ok(code) = u32::from_str_radix(&hex, 16)
+                                && let Some(ch) = char::from_u32(code) {
+                                    s.push(ch);
+                                }
+                        }
+                        'c' => {
+                            if let Some(ch) = self.advance() {
+                                if ch == '\\' {
+                                    if let Some(next_ch) = self.advance() {
+                                        let ctrl = match next_ch {
+                                            'a' => 0x01, 'b' => 0x02, 'c' => 0x03,
+                                            'd' => 0x04, 'e' => 0x05, 'f' => 0x06,
+                                            'g' => 0x07, 'h' => 0x08, 'i' => 0x09,
+                                            'j' => 0x0a, 'k' => 0x0b, 'l' => 0x0c,
+                                            'm' => 0x0d, 'n' => 0x0e, 'o' => 0x0f,
+                                            'p' => 0x10, 'q' => 0x11, 'r' => 0x12,
+                                            's' => 0x13, 't' => 0x14, 'u' => 0x15,
+                                            'v' => 0x16, 'w' => 0x17, 'x' => 0x18,
+                                            'y' => 0x19, 'z' => 0x1a,
+                                            '[' => 0x1b, '\\' => 0x1c, ']' => 0x1d,
+                                            '^' => 0x1e, '_' => 0x1f, '?' => 0x7f,
+                                            _ => (next_ch as u32 & 0x1f) as u8,
+                                        };
+                                        s.push(ctrl as char);
+                                    }
+                                } else if ch == '?' {
+                                    s.push(0x7f as char);
+                                } else {
+                                    s.push((ch as u32 & 0x1f) as u8 as char);
+                                }
                             }
                         }
                         _ => s.push(next),
@@ -399,7 +555,8 @@ impl Lexer {
                             self.advance();
                             if self.peek() == Some('|') {
                                 self.advance();
-                                tokens.push(Token::GreaterPipe);
+                                tokens.push(Token::DoubleGreater);
+                                tokens.push(Token::Pipe);
                             } else {
                                 tokens.push(Token::DoubleGreater);
                             }
@@ -420,7 +577,10 @@ impl Lexer {
                     match self.peek() {
                         Some('<') => {
                             self.advance();
-                            if self.peek() == Some('<') {
+                            if self.peek() == Some('-') {
+                                self.advance();
+                                tokens.push(Token::LessLessDash);
+                            } else if self.peek() == Some('<') {
                                 self.advance();
                                 tokens.push(Token::LessLessLess);
                             } else {
@@ -435,76 +595,13 @@ impl Lexer {
                     }
                 }
                 '$' => {
-                    self.advance();
-                    if let Some(ch) = self.peek() {
-                        match ch {
-                            '\'' => {
-                                self.advance();
-                                tokens.push(Token::Word(self.read_ansi_c_quoted()));
-                            }
-                            '(' => {
-                                let mut sub = String::from("$(");
-                                let mut depth = 1u32;
-                                self.advance();
-                                while let Some(c) = self.peek() {
-                                    match c {
-                                        '(' => { depth += 1; sub.push(c); self.advance(); }
-                                        ')' => {
-                                            depth -= 1;
-                                            sub.push(c);
-                                            self.advance();
-                                            if depth == 0 { break; }
-                                        }
-                                        _ => { sub.push(c); self.advance(); }
-                                    }
-                                }
-                                tokens.push(Token::Word(sub));
-                            }
-                            '{' => {
-                                self.advance();
-                                let mut var = String::from("${");
-                                let mut depth = 1u32;
-                                while let Some(c) = self.peek() {
-                                    match c {
-                                        '{' => { depth += 1; var.push(c); }
-                                        '}' => {
-                                            var.push(c);
-                                            depth -= 1;
-                                            if depth == 0 {
-                                                self.advance();
-                                                break;
-                                            }
-                                        }
-                                        _ => { var.push(c); }
-                                    }
-                                    self.advance();
-                                }
-                                tokens.push(Token::Word(var));
-                            }
-                            '?' | '$' | '!' | '@' | '*' | '#' | '-' | '_' => {
-                                self.advance();
-                                tokens.push(Token::Word(format!("${}", ch)));
-                            }
-                            '0'..='9' => {
-                                self.advance();
-                                tokens.push(Token::Word(format!("${}", ch)));
-                            }
-                            _ => {
-                                let mut var = String::from("$");
-                                while let Some(ch) = self.peek() {
-                                    if ch.is_alphanumeric() || ch == '_' {
-                                        var.push(ch);
-                                        self.advance();
-                                    } else {
-                                        break;
-                                    }
-                                }
-                                tokens.push(Token::Word(var));
-                            }
-                        }
-                    } else {
-                        tokens.push(Token::Word("$".into()));
+                    let mut w = self.read_dollar_word();
+                    if !matches!(self.peek(), None | Some(' ') | Some('\t') | Some('\r') | Some('\n')
+                        | Some('|') | Some('&') | Some(';') | Some('(') | Some(')')
+                        | Some('{') | Some('}') | Some('<') | Some('>')) {
+                        w.push_str(&self.read_word());
                     }
+                    tokens.push(Token::Word(w));
                 }
                 '[' => {
                     self.advance();
@@ -526,8 +623,12 @@ impl Lexer {
                 }
                 '\\' => {
                     self.advance();
-                    if let Some(next) = self.advance() {
-                        tokens.push(Token::Word(next.to_string()));
+                    if let Some(next) = self.peek() {
+                        if next == '\n' {
+                            self.advance();
+                            continue;
+                        }
+                        tokens.push(Token::Word(self.advance().unwrap().to_string()));
                     }
                 }
                 _ => {

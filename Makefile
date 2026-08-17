@@ -23,14 +23,14 @@ build: $(CPS_DIR)
 	CARGO_TARGET_DIR=$(CURDIR)/target cargo build --target $(RUST_TARGET) --profile $(PROFILE) --locked
 
 install: build install-man
-	install -Dm755 $(TARGET) $(DESTDIR)$(PREFIX)/bin/ctx
+	install -Dm755 $(TARGET) $(DESTDIR)/bin/ctx
 
 install-man:
 	install -d $(DESTDIR)$(PREFIX)/share/man/man1
 	install -m 644 docs/ctx.1 $(DESTDIR)$(PREFIX)/share/man/man1/
 
 uninstall:
-	rm -f $(DESTDIR)$(PREFIX)/bin/ctx
+	rm -f $(DESTDIR)/bin/ctx
 
 clean:
 	cargo clean

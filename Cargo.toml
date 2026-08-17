@@ -2,7 +2,7 @@
 name = "context"
 version = "0.70.0"
 edition = "2024"
-description = "A fast, fully configurable POSIX shell for Cudane"
+description = "A lightweight configurable POSIX shell"
 
 [features]
 default = ["python"]
@@ -13,7 +13,6 @@ name = "ctx"
 path = "src/main.rs"
 
 [dependencies]
-cps = { git = "https://github.com/Mapuse/CPS", rev = "d8d5f7da49917ea7636147b8a65f3541311c45ab" }
 crossterm = "0.28"
 serde = { version = "1", features = ["derive"] }
 toml = "0.8"
@@ -23,6 +22,8 @@ libc = "0.2"
 regex = "1"
 wallust = "3.5"
 serde_json = "1"
+
+cps = { git = "https://github.com/Mapuse/CPS" }
 
 [profile.release]
 opt-level = 3

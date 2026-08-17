@@ -275,6 +275,9 @@ pub fn apply(cfg: &mut Config) {
         cfg.colors.syntax_variable = cfg.colors.accent.clone();
         cfg.colors.syntax_operator = cfg.colors.success.clone();
         cfg.colors.syntax_command = cfg.colors.info.clone();
+        cfg.colors.syntax_flag = cfg.colors.accent.clone();
+        cfg.colors.syntax_path = cfg.colors.warning.clone();
+        cfg.colors.syntax_number = cfg.colors.accent.clone();
     }
 
     cfg.display.duration_color = cfg.colors.dim.clone();

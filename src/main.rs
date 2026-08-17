@@ -174,7 +174,7 @@ fn main() {
         signals::init();
         signals::setup_parent_handlers(&cfg.signals);
 
-        executor.run_source_rc();
+        executor.run_source_rc(opts.rcfile.as_deref());
         executor.run_integrations();
 
         let stdin = io::stdin();
@@ -211,7 +211,7 @@ fn main() {
         signals::init();
         signals::setup_parent_handlers(&cfg.signals);
 
-        executor.run_source_rc();
+        executor.run_source_rc(opts.rcfile.as_deref());
         executor.run_integrations();
 
         let tokens = shell::lexer::tokenize(&cmd);
@@ -412,7 +412,7 @@ fn main() {
     signals::init();
     signals::setup_parent_handlers(&cfg.signals);
 
-    executor.run_source_rc();
+    executor.run_source_rc(opts.rcfile.as_deref());
 
     for cmd in &cfg.startup.run_commands {
         let tokens = shell::lexer::tokenize(cmd);
@@ -512,11 +512,27 @@ fn main() {
             sync_history(&history_path, &mut history, &mut known_lines);
         }
 
+        if let Some(cmd) = executor.env.get("PROMPT_COMMAND").map(|s| s.to_string())
+            && !cmd.is_empty() {
+                let tokens = shell::lexer::tokenize(&cmd);
+                let ast = shell::parser::parse(tokens);
+                executor.execute(&ast);
+            }
+
         let mut prompt_display = if let Some(ref cache) = prompt_cache {
             cache.get_or_compute(&executor.env, &cfg, executor.last_status)
         } else {
             prompt::render_prompt(&executor.env, &cfg, executor.last_status)
         };
+
+        if let Some(ps1) = executor.env.get("PS1").map(|s| s.to_string()) {
+            eprint!("{}", ps1);
+            let _ = io::stderr().flush();
+            prompt_display.input_prefix = String::new();
+            prompt_display.lines_above.clear();
+            prompt_display.lines_below.clear();
+            prompt_display.right_prompt.clear();
+        }
 
         if let Some(ref theme) = py_engine.theme {
             let mut context = std::collections::HashMap::new();
@@ -838,6 +854,7 @@ struct CliOptions {
     unset_var: Option<String>,
     chdir: Option<String>,
     workdir: Option<String>,
+    rcfile: Option<String>,
     norc: bool,
     noprofile: bool,
     posix: bool,
@@ -923,6 +940,7 @@ impl CliOptions {
             unset_var: None,
             chdir: None,
             workdir: None,
+            rcfile: None,
             norc: false,
             noprofile: false,
             posix: false,
@@ -1030,6 +1048,10 @@ impl CliOptions {
                     opts.workdir = args.get(i).cloned();
                 }
                 "-n" | "--norc" => opts.norc = true,
+                "--rcfile" => {
+                    i += 1;
+                    opts.rcfile = args.get(i).cloned();
+                }
                 "-N" | "--noprofile" => opts.noprofile = true,
                 "-p" | "--posix" => opts.posix = true,
                 "-r" | "--restricted" => opts.restricted = true,
@@ -1155,115 +1177,114 @@ impl CliOptions {
 
 fn print_help() {
     eprintln!("Usage: ctx [OPTIONS] [COMMAND]");
-    eprintln!("A fast, fully configurable POSIX shell written in Rust.");
     eprintln!();
-    eprintln!("INFO:");
+    eprintln!("Info:");
     eprintln!("  -h, --help               Show this help message");
     eprintln!("  -v, --version            Show version number");
-    eprintln!("  -V, --verbose    Show detailed version and build info");
+    eprintln!("  -V, --verbose            Show detailed version and build info");
     eprintln!("  -l, --license            Show license information");
     eprintln!("  -a, --authors            Show authors");
     eprintln!();
-    eprintln!("COMMAND EXECUTION:");
-    eprintln!("  -c, --command CMD        Execute CMD as a command string, then exit");
-    eprintln!("  -s, --stdin              Read commands from standard input, then exit");
-    eprintln!("  -f, --file FILE          Read and execute commands from FILE, then exit");
-    eprintln!("  -e, --eval CODE          Evaluate CODE as shell code, then exit");
+    eprintln!("Excution:");
+    eprintln!("  -c, --command [CMD]          Execute CMD as a command string, then exit");
+    eprintln!("  -s, --stdin                  Read commands from standard input, then exit");
+    eprintln!("  -f, --file [FILE]            Read and execute commands from a file, then exit");
+    eprintln!("  -e, --eval [CODE]            Evaluate code as a shell command, then exit");
     eprintln!();
-    eprintln!("ENVIRONMENT:");
-    eprintln!("  -E, --env KEY=VALUE      Set environment variable KEY to VALUE");
-    eprintln!("  -U, --unset KEY          Remove environment variable KEY");
-    eprintln!("  -C, --chdir DIR          Change to DIR before executing commands");
-    eprintln!("  -W, --workdir DIR        Set working directory to DIR");
+    eprintln!("Environment:");
+    eprintln!("  -E, --env [KEY]=[VALUE]      Set environment variable key to its value");
+    eprintln!("  -U, --unset [KEY]            Remove environment variable's key");
+    eprintln!("  -C, --chdir [DIR]            Change to DIR before executing commands");
+    eprintln!("  -W, --workdir [DIR]          Set working directory to DIR");
     eprintln!();
-    eprintln!("SHELL MODE:");
-    eprintln!("  -p, --posix              Run in POSIX-conformant mode");
+    eprintln!("Modes:");
+    eprintln!("  -p, --posix              Run in POSIX mode");
     eprintln!("  -r, --restricted         Run in restricted mode (no cd, no export, etc.)");
     eprintln!("  -i, --interactive        Force interactive mode");
     eprintln!("  -I, --no-interactive     Force non-interactive mode");
-    eprintln!("  -b, --bash        Enable bash compatibility shims");
+    eprintln!("  -b, --bash               Enable bash compatibility");
     eprintln!();
-    eprintln!("STARTUP:");
-    eprintln!("  -n, --norc               Don't read the rc file (~/.config/ctx/c.toml)");
-    eprintln!("  -N, --noprofile          Don't read profile or startup scripts");
-    eprintln!("      --no-startup         Skip all startup scripts and run commands");
-    eprintln!("      --no-welcome         Suppress the welcome message / ASCII art");
-    eprintln!("      --no-integrations    Skip loading fzf/zoxide integrations");
-    eprintln!("      --no-plugins         Skip loading Python plugins");
-    eprintln!("      --no-python          Skip Python plugin subsystem entirely");
-    eprintln!("      --no-dynamic         Disable dynamic wallpaper colors (wallust)");
-    eprintln!("      --no-ascii           Suppress ASCII art on startup");
-    eprintln!("      --ascii              Force ASCII art on startup");
-    eprintln!("      --run-command CMD    Run CMD after rc loading, before prompt");
-    eprintln!("  -H, --startup-delay MS   Delay MS milliseconds before first prompt");
+    eprintln!("Startup:");
+    eprintln!("  -n, --norc                 Don't read the rc file (default: ~/.config/ctx/c.toml)");
+    eprintln!("  -N, --noprofile            Don't read profile or startup scripts");
+    eprintln!("      --no-startup           Skip all startup scripts and run commands");
+    eprintln!("      --no-welcome           Suppress the welcome message / ASCII art");
+    eprintln!("      --no-integrations      Skip loading fzf/zoxide integrations");
+    eprintln!("      --no-plugins           Skip loading Python plugins");
+    eprintln!("      --no-python            Skip Python plugin subsystem entirely");
+    eprintln!("      --no-dynamic           Disable dynamic wallpaper colors (wallust)");
+    eprintln!("      --no-ascii             Suppress ASCII art on startup");
+    eprintln!("      --ascii                Force ASCII art on startup");
+    eprintln!("      --run-command [CMD]    Run a command after rc loading, before prompt");
+    eprintln!("  -H, --startup-delay [MS]   Delay milliseconds before first prompt");
     eprintln!();
-    eprintln!("OUTPUT AND DEBUG:");
+    eprintln!("Output & Debug:");
     eprintln!("  -q, --quiet              Suppress informational output");
     eprintln!("  -Q, --verbose            Enable verbose output");
     eprintln!("  -d, --debug              Enable debug mode with extra diagnostics");
     eprintln!("  -t, --trace              Enable execution tracing");
     eprintln!("  -x, --xtrace             Enable command tracing (like set -x)");
-    eprintln!("  -g, --log-file FILE      Write log output to FILE");
+    eprintln!("  -g, --log-file [FILE]    Write log output to a file");
     eprintln!("      --no-log             Disable logging");
     eprintln!("      --benchmark          Run in benchmark mode");
     eprintln!();
-    eprintln!("TERMINAL:");
-    eprintln!("  -M, --no-color           Disable all color output");
-    eprintln!("  -F, --color              Force color output even when not a TTY");
-    eprintln!("  -R, --color-mode MODE    Set color mode: true_color, 256, 16, 0");
-    eprintln!("  -u, --utf8               Enable full UTF-8 character support");
-    eprintln!("      --no-utf8            Disable UTF-8, use ASCII only");
-    eprintln!("  -w, --width COLS         Override detected terminal width");
-    eprintln!("  -j, --height ROWS        Override detected terminal height");
-    eprintln!("  -J, --raw                Enable raw terminal mode");
-    eprintln!("      --no-raw             Disable raw terminal mode");
-    eprintln!("      --cursor-style STYLE Set cursor style: block, beam, underline");
-    eprintln!("      --no-blink           Disable cursor blinking");
-    eprintln!("      --blink              Enable cursor blinking");
+    eprintln!("Terminal:");
+    eprintln!("  -M, --no-color               Disable all color output");
+    eprintln!("  -F, --color                  Force color output even when not a TTY");
+    eprintln!("  -R, --color-mode [MODE]      Set color mode: true_color, 256, 16, 0");
+    eprintln!("  -u, --utf8                   Enable full UTF-8 character support");
+    eprintln!("      --no-utf8                Disable UTF-8, use ASCII only");
+    eprintln!("  -w, --width [COLS]           Override detected terminal width");
+    eprintln!("  -j, --height [ROWS]          Override detected terminal height");
+    eprintln!("  -J, --raw                    Enable raw terminal mode");
+    eprintln!("      --no-raw                 Disable raw terminal mode");
+    eprintln!("      --cursor-style [STYLE]   Set cursor style: block, beam, underline");
+    eprintln!("      --no-blink               Disable cursor blinking");
+    eprintln!("      --blink                  Enable cursor blinking");
     eprintln!();
-    eprintln!("HISTORY:");
-    eprintln!("  -y, --no-history         Disable history recording entirely");
-    eprintln!("  -Y, --history-file FILE  Use FILE as the history file");
-    eprintln!("  -z, --history-size SIZE  Set max history size to SIZE entries");
-    eprintln!("  -Z, --no-history-share   Don't share history across sessions");
+    eprintln!("History:");
+    eprintln!("  -y, --no-history             Disable history recording entirely");
+    eprintln!("  -Y, --history-file [FILE]    Use a file as the history file");
+    eprintln!("  -z, --history-size [SIZE]    Set max history size for entries");
+    eprintln!("  -Z, --no-history-share       Don't share history across sessions");
     eprintln!();
-    eprintln!("PROMPT:");
-    eprintln!("      --no-prompt          Disable the interactive prompt");
-    eprintln!("  -T, --prompt-format FMT  Override prompt format string");
-    eprintln!("  -A, --prompt-char CHAR   Override prompt character (default: ❯)");
-    eprintln!("      --no-transient-prompt  Disable transient prompt rewriting");
-    eprintln!("  -L, --instant-prompt     Enable instant prompt from cache");
-    eprintln!("      --no-instant-prompt  Disable instant prompt");
+    eprintln!("Prompting:");
+    eprintln!("      --no-prompt              Disable the interactive prompt");
+    eprintln!("  -T, --prompt-format [FMT]    Override prompt format string");
+    eprintln!("  -A, --prompt-char [CHAR]     Override prompt character (default: ❯)");
+    eprintln!("      --no-transient-prompt    Disable transient prompt rewriting");
+    eprintln!("  -L, --instant-prompt         Enable instant prompt from cache");
+    eprintln!("      --no-instant-prompt      Disable instant prompt");
     eprintln!();
-    eprintln!("JOB CONTROL:");
+    eprintln!("Jobs Control:");
     eprintln!("  -k, --no-jobs            Disable job control");
     eprintln!("  -K, --monitor            Enable job monitoring (like set -m)");
     eprintln!();
-    eprintln!("SIGNALS:");
-    eprintln!("      --no-signals         Disable signal handling");
-    eprintln!("  -S, --forward-signals    Forward signals to child processes");
-    eprintln!("      --no-forward-signals Don't forward signals to children");
+    eprintln!("Signals:");
+    eprintln!("      --no-signals            Disable signal handling");
+    eprintln!("  -S, --forward-signals       Forward signals to child processes");
+    eprintln!("      --no-forward-signals    Don't forward signals to children");
     eprintln!();
-    eprintln!("SECURITY:");
-    eprintln!("  -B, --sandbox            Enable full sandbox mode");
+    eprintln!("Security:");
+    eprintln!("  -B, --sandbox            Enable sandbox mode");
     eprintln!("      --no-sandbox         Disable sandbox mode");
     eprintln!("      --no-exec            Disable command execution");
     eprintln!("      --dry-run            Dry run mode, don't execute commands");
     eprintln!();
-    eprintln!("CONFIGURATION:");
-    eprintln!("  -o, --print-config       Print current config as JSON and exit");
-    eprintln!("  -O, --dump-config        Print current config as TOML and exit");
-    eprintln!("  -P, --show-config-path   Print config file path and exit");
-    eprintln!("  -D, --show-config-dir    Print config directory path and exit");
-    eprintln!("      --config-file FILE   Use FILE as the config file");
-    eprintln!("      --no-config          Don't load any config file");
+    eprintln!("Configuration:");
+    eprintln!("  -o, --print-config           Print current config as JSON and exit");
+    eprintln!("  -O, --dump-config            Print current config as TOML and exit");
+    eprintln!("  -P, --show-config-path       Print config file path and exit");
+    eprintln!("  -D, --show-config-dir        Print config directory path and exit");
+    eprintln!("      --config-file [FILE]     Use a file as the config file");
+    eprintln!("      --no-config              Don't load any config file");
     eprintln!();
-    eprintln!("CONFIG GENERATION:");
+    eprintln!("Config Generating:");
     eprintln!("  -G, --gen-cfg            Generate default c.toml config and exit");
-    eprintln!("  -X, --gen-dycfg          Generate dynamic c.toml (wallust) and exit");
+    eprintln!("  -X, --gen-dycfg          Generate dynamic-colored c.toml and exit");
     eprintln!();
-    eprintln!("BRANDING:");
-    eprintln!("      --app-name NAME      Override the application name");
-    eprintln!("      --shell-name NAME    Override the shell name");
-    eprintln!("      --tagline TEXT       Override the tagline text");
+    eprintln!("Branding:");
+    eprintln!("      --app-name [NAME]      Override the application name");
+    eprintln!("      --shell-name [NAME]    Override the shell name");
+    eprintln!("      --tagline [TEXT]       Override the tagline text");
 }

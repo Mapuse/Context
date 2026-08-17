@@ -131,6 +131,14 @@ gradient_end = "#22c55e"
 # syntax highlighting colors: set to true to derive from the dynamic wallpaper
 # palette, false to use the hex values below
 # syntax_use_dynamic_colors = true
+# syntax_comment = "#6b7280"
+# syntax_string = "#f59e0b"
+# syntax_variable = "#22d3ee"
+# syntax_operator = "#22c55e"
+# syntax_command = "#3b82f6"
+# syntax_flag = "#c084fc"
+# syntax_path = "#fb923c"
+# syntax_number = "#22d3ee"
 
 # ── Symbols ────────────────────────────────────────────────────
 [symbols]

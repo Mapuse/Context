@@ -3,9 +3,7 @@ pub enum RedirKind {
     Output,
     OutputAppend,
     Input,
-    #[allow(dead_code)]
-    HereDoc(String),
-    HereDocBody(String),
+    HereDocBody(String, bool),
     HereString(String),
     Clobber,
     OutputFd,
@@ -48,6 +46,12 @@ pub enum Node {
         values: Vec<String>,
         body: Box<Node>,
     },
+    ForArith {
+        init: Option<String>,
+        cond: Option<String>,
+        incr: Option<String>,
+        body: Box<Node>,
+    },
     While {
         condition: Box<Node>,
         body: Box<Node>,
@@ -78,6 +82,9 @@ pub enum Node {
     Assignment {
         name: String,
         value: String,
+    },
+    Arithmetic {
+        expr: String,
     },
     TestDoubleBracket {
         tokens: Vec<String>,

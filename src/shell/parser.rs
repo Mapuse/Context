@@ -34,25 +34,6 @@ impl Parser {
     }
 
 
-    fn expect_word_quoted(&mut self) -> Option<String> {
-        match self.peek() {
-            Token::SingleQuoted(_) => {
-                if let Token::SingleQuoted(s) = self.advance() {
-                    Some(format!("\x01{}\x01", s))
-                } else { None }
-            }
-            Token::DoubleQuoted(_) => {
-                if let Token::DoubleQuoted(s) = self.advance() {
-                    Some(format!("\x01{}\x01", s))
-                } else { None }
-            }
-            Token::Word(_) | Token::Backtick(_) => {
-                self.expect_word()
-            }
-            _ => None,
-        }
-    }
-
     fn skip_newlines(&mut self) {
         while matches!(self.peek(), Token::Newline) {
             self.advance();
@@ -69,10 +50,10 @@ impl Parser {
     fn parse_list(&mut self) -> Node {
         let mut left = self.parse_and_or();
         loop {
-            self.skip_newlines();
             match self.peek() {
-                Token::Semi => {
+                Token::Semi | Token::Newline | Token::Amp => {
                     self.advance();
+                    self.skip_newlines();
                     let right = self.parse_and_or();
                     if right.is_empty() {
                         return left;
@@ -83,7 +64,7 @@ impl Parser {
                         right: Box::new(right),
                     };
                 }
-                Token::Newline | Token::Eof => break,
+                Token::Eof => break,
                 _ => break,
             }
         }
@@ -211,7 +192,7 @@ impl Parser {
         loop {
             self.skip_newlines();
             if matches!(self.peek(), Token::Done | Token::Eof) { break; }
-            body_cmds.push(self.parse_command());
+            body_cmds.push(self.parse_and_or());
             if matches!(self.peek(), Token::Semi) { self.advance(); }
         }
         if matches!(self.peek(), Token::Done) { self.advance(); }
@@ -257,12 +238,35 @@ impl Parser {
                 }
                 Token::Eof => break,
                 t => {
-                    inner_tokens.push(t.to_string());
+                    match t {
+                        Token::DoubleQuoted(s) => inner_tokens.push(format!("\x01{}\x01", s)),
+                        Token::SingleQuoted(s) => inner_tokens.push(format!("\x02{}\x02", s)),
+                        other => inner_tokens.push(other.to_string()),
+                    }
                     self.advance();
                 }
             }
         }
         Node::TestDoubleBracket { tokens: inner_tokens }
+    }
+
+    fn expect_word_quoted(&mut self) -> Option<String> {
+        match self.peek() {
+            Token::SingleQuoted(_) => {
+                if let Token::SingleQuoted(s) = self.advance() {
+                    Some(format!("\x02{}\x02", s))
+                } else { None }
+            }
+            Token::DoubleQuoted(_) => {
+                if let Token::DoubleQuoted(s) = self.advance() {
+                    Some(format!("\x01{}\x01", s))
+                } else { None }
+            }
+            Token::Word(_) | Token::Backtick(_) => {
+                self.expect_word()
+            }
+            _ => None,
+        }
     }
 
     fn parse_simple_command(&mut self) -> Node {
@@ -365,7 +369,9 @@ impl Parser {
             Token::Less => { self.advance(); RedirKind::Input }
             Token::LessLess => {
                 self.advance();
-                let delimiter = self.expect_word().unwrap_or_default();
+                let raw_delimiter = self.expect_word().unwrap_or_default();
+                let delimiter_quoted = raw_delimiter.contains('\x01') || raw_delimiter.contains('\x02');
+                let delimiter = raw_delimiter.replace(['\x01', '\x02'], "");
 
                 self.skip_newlines();
                 let mut body_lines = Vec::new();
@@ -386,12 +392,45 @@ impl Parser {
                     }
                 }
                 let body = body_lines.join("\n");
-                RedirKind::HereDocBody(body)
+                RedirKind::HereDocBody(body, !delimiter_quoted)
             }
             Token::AmpGreater => { self.advance(); RedirKind::OutputFd }
             Token::AmpGreaterGreater => { self.advance(); RedirKind::OutputFdAppend }
             Token::GreaterPipe => { self.advance(); RedirKind::Clobber }
             Token::GreaterAmp => { self.advance(); RedirKind::RedirectFd }
+            Token::LessLessDash => {
+                self.advance();
+                let raw_delimiter = self.expect_word().unwrap_or_default();
+                let delimiter_quoted = raw_delimiter.contains('\x01') || raw_delimiter.contains('\x02');
+                let delimiter = raw_delimiter.replace(['\x01', '\x02'], "");
+
+                self.skip_newlines();
+                let mut body_lines = Vec::new();
+                loop {
+                    match self.peek() {
+                        Token::Eof => break,
+                        Token::Newline => {
+                            self.advance();
+                            continue;
+                        }
+                        _ => {
+                            let line = self.collect_line_until_newline();
+                            let line_stripped_tabs: String = line.chars()
+                                .skip_while(|&c| c == '\t')
+                                .collect();
+                            if line_stripped_tabs.trim_end() == delimiter {
+                                break;
+                            }
+                            let stripped: String = line.chars()
+                                .skip_while(|&c| c == '\t')
+                                .collect();
+                            body_lines.push(stripped);
+                        }
+                    }
+                }
+                let body = body_lines.join("\n");
+                RedirKind::HereDocBody(body, !delimiter_quoted)
+            }
             Token::LessLessLess => {
                 self.advance();
                 let word = self.expect_word().unwrap_or_default();
@@ -470,7 +509,6 @@ impl Parser {
                     self.advance();
                     self.skip_newlines();
                     else_body = Some(Box::new(self.parse()));
-                    break;
                 }
                 Token::Fi => {
                     self.advance();
@@ -508,6 +546,9 @@ impl Parser {
 
     fn parse_for(&mut self) -> Node {
         self.advance();
+        if matches!(self.peek(), Token::LBraceBrace) {
+            return self.parse_for_cstyle();
+        }
         let var = self.expect_word().unwrap_or_default();
         let values = if matches!(self.peek(), Token::In) {
             self.advance();
@@ -531,7 +572,7 @@ impl Parser {
             if matches!(self.peek(), Token::Done | Token::Eof) {
                 break;
             }
-            body_cmds.push(self.parse_command());
+            body_cmds.push(self.parse_and_or());
             if matches!(self.peek(), Token::Semi) {
                 self.advance();
             }
@@ -555,6 +596,76 @@ impl Parser {
         };
 
         Node::For { var, values, body: Box::new(body) }
+    }
+
+    fn parse_for_cstyle(&mut self) -> Node {
+        self.advance();
+        let mut parts: Vec<String> = Vec::new();
+        let mut cur = String::new();
+        loop {
+            match self.peek() {
+                Token::RBraceBrace => { self.advance(); break; }
+                Token::Eof => break,
+                Token::Semi => {
+                    parts.push(cur.trim().to_string());
+                    cur.clear();
+                    self.advance();
+                }
+                t => {
+                    let s = t.to_string();
+                    cur.push_str(&s);
+                    if !s.ends_with('<') && !s.ends_with('>') {
+                        cur.push(' ');
+                    }
+                    self.advance();
+                }
+            }
+        }
+        if !cur.trim().is_empty() {
+            parts.push(cur.trim().to_string());
+        }
+        let get = |parts: &[String], i: usize| {
+            parts.get(i).filter(|s| !s.is_empty()).cloned()
+        };
+        let init = get(&parts, 0);
+        let cond = get(&parts, 1);
+        let incr = get(&parts, 2);
+        self.skip_newlines();
+        if matches!(self.peek(), Token::Semi) { self.advance(); }
+        self.skip_newlines();
+        if matches!(self.peek(), Token::Do) { self.advance(); }
+        self.skip_newlines();
+
+        let mut body_cmds = Vec::new();
+        loop {
+            self.skip_newlines();
+            if matches!(self.peek(), Token::Done | Token::Eof) {
+                break;
+            }
+            body_cmds.push(self.parse_and_or());
+            if matches!(self.peek(), Token::Semi) {
+                self.advance();
+            }
+        }
+        if matches!(self.peek(), Token::Done) { self.advance(); }
+
+        let body = if body_cmds.len() == 1 {
+            body_cmds.remove(0)
+        } else if body_cmds.is_empty() {
+            Node::Empty
+        } else {
+            let mut left = body_cmds.remove(0);
+            for cmd in body_cmds {
+                left = Node::Compound {
+                    kind: CompoundKind::Semicolon,
+                    left: Box::new(left),
+                    right: Box::new(cmd),
+                };
+            }
+            left
+        };
+
+        Node::ForArith { init, cond, incr, body: Box::new(body) }
     }
 
     fn parse_case(&mut self) -> Node {
@@ -590,7 +701,7 @@ impl Parser {
                 if matches!(self.peek(), Token::DoubleSemi | Token::Esac | Token::Eof) {
                     break;
                 }
-                body_cmds.push(self.parse_command());
+                body_cmds.push(self.parse_and_or());
                 if matches!(self.peek(), Token::Semi) {
                     self.advance();
                 }
@@ -644,11 +755,7 @@ impl Parser {
             }
         }
         expr.truncate(expr.trim_end().len());
-        Node::Command {
-            words: vec!["let".into(), expr],
-            redirects: Vec::new(),
-            background: false,
-        }
+        Node::Arithmetic { expr }
     }
 }
 

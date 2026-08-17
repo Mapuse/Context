@@ -13,6 +13,11 @@ pub struct Expander<'a> {
 
 impl<'a> Expander<'a> {
     pub fn new(env: &'a mut Env, last_status: i32, positional: Vec<String>, background_pid: i32) -> Self {
+        let positional = if positional.is_empty() {
+            env.positional().to_vec()
+        } else {
+            positional
+        };
         Self {
             env,
             last_status,
@@ -30,103 +35,195 @@ impl<'a> Expander<'a> {
         let len = chars.len();
         let mut i = 0;
 
-
-        if len >= 2 && chars[0] == '\x01'
-            && let Some(_end) = chars[1..].iter().position(|&c| c == '\x01') {
-                let inner = &word[1..word.len() - 1];
-                let expanded = self.expand_word(inner);
-                return format!("\x01{}\x01", expanded);
-            }
-
         while i < len {
-            if chars[i] == '$' && i + 1 < len {
-                i += 1;
-                match chars[i] {
-                    '(' => {
-                        i += 1;
-                        let start = i;
-                        let mut depth = 1u32;
-                        while i < len && depth > 0 {
-                            match chars[i] {
-                                '(' => depth += 1,
-                                ')' => { depth -= 1; if depth == 0 { break; } }
-                                _ => {}
+            let ch = chars[i];
+            match ch {
+                '\x02' => {
+                    i += 1;
+                    let start = i;
+                    while i < len && chars[i] != '\x02' { i += 1; }
+                    result.push('\x02');
+                    result.push_str(&word[start..i]);
+                    result.push('\x02');
+                    if i < len { i += 1; }
+                }
+                '\x01' => {
+                    i += 1;
+                    result.push('\x01');
+                    while i < len && chars[i] != '\x01' {
+                        if chars[i] == '$' && i + 1 < len && chars[i + 1] == '@' {
+                            i += 2;
+                            for (j, param) in self.positional.iter().enumerate() {
+                                if j > 0 { result.push(' '); }
+                                result.push('\x01');
+                                result.push_str(param);
+                                result.push('\x01');
                             }
+                        } else if chars[i] == '$' && i + 1 < len && chars[i + 1] == '*' {
+                            i += 2;
+                            let ifs = self.env.get("IFS").unwrap_or(" \t\n");
+                            let sep = ifs.chars().next().map(|c| c.to_string()).unwrap_or_else(|| " ".to_string());
+                            result.push_str(&self.positional.join(&sep));
+                        } else if chars[i] == '$' && i + 1 < len {
                             i += 1;
-                        }
-                        let inner = &word[start..i];
-                        if i < len { i += 1; }
-                        let output = self.run_cmd_sub(inner);
-                        result.push_str(&output);
-                    }
-                    '{' => {
-                        i += 1;
-                        let start = i;
-                        while i < len && chars[i] != '}' { i += 1; }
-                        let var = &word[start..i];
-                        if i < len { i += 1; }
-                        result.push_str(&self.expand_var(var));
-                    }
-                    '?' => { result.push_str(&self.last_status.to_string()); i += 1; }
-                    '$' => { result.push_str(&std::process::id().to_string()); i += 1; }
-                    '!' => { result.push_str(&self.background_pid.to_string()); i += 1; }
-                    '0'..='9' => {
-                        let idx = chars[i].to_digit(10).expect("digit 0-9") as usize;
-                        if idx < self.positional.len() {
-                            result.push_str(&self.positional[idx]);
-                        }
-                        i += 1;
-                    }
-                    '@' | '*' => {
-
-                        result.push_str(&self.positional.join(" "));
-                        i += 1;
-                    }
-                    '#' => { result.push_str(&self.positional.len().to_string()); i += 1; }
-                    '-' => { result.push('-'); i += 1; }
-                    '_' => { result.push_str(self.env.get("_").unwrap_or("")); i += 1; }
-                    _ => {
-                        let start = i;
-                        while i < len && (chars[i].is_alphanumeric() || chars[i] == '_') {
+                            result.push_str(&self.expand_dollar(&chars, &mut i, len));
+                        } else if chars[i] == '\\' && i + 1 < len
+                            && matches!(chars[i + 1], '$' | '`' | '"' | '\\') {
+                                i += 1;
+                                result.push(chars[i]);
+                                i += 1;
+                        } else if chars[i] == '`' {
                             i += 1;
-                        }
-                        if i > start {
-                            result.push_str(&self.expand_var(&word[start..i]));
+                            let start = i;
+                            while i < len && chars[i] != '`' { i += 1; }
+                            let inner = &word[start..i];
+                            if i < len { i += 1; }
+                            let output = self.run_cmd_sub(inner);
+                            result.push_str(&output);
                         } else {
-                            result.push('$');
+                            result.push(chars[i]);
+                            i += 1;
                         }
                     }
+                    result.push('\x01');
+                    if i < len { i += 1; }
                 }
-            } else if chars[i] == '`' {
-                i += 1;
-                let start = i;
-                while i < len && chars[i] != '`' { i += 1; }
-                let inner = &word[start..i];
-                if i < len { i += 1; }
-                let output = self.run_cmd_sub(inner);
-                result.push_str(&output);
-            } else if chars[i] == '~' && (i == 0 || chars[i - 1] == ' ' || chars[i - 1] == ':' || chars[i - 1] == '=') {
-                i += 1;
-                let start = i;
-                while i < len && chars[i] != '/' && chars[i] != ':' && chars[i] != ' ' { i += 1; }
-                let user_part = &word[start..i];
-                if user_part.is_empty() {
-                    result.push_str(&self.env.home());
-                } else if let Some(named) = self.env.get_named_dir(user_part) {
-                    result.push_str(named);
-                } else {
-                    result.push_str(&resolve_user_home(user_part));
+                '$' if i + 1 < len => {
+                    i += 1;
+                    result.push_str(&self.expand_dollar(&chars, &mut i, len));
                 }
-            } else if chars[i] == '\\' && i + 1 < len {
-                i += 1;
-                result.push(chars[i]);
-                i += 1;
-            } else {
-                result.push(chars[i]);
-                i += 1;
+                '`' => {
+                    i += 1;
+                    let start = i;
+                    while i < len && chars[i] != '`' { i += 1; }
+                    let inner = &word[start..i];
+                    if i < len { i += 1; }
+                    let output = self.run_cmd_sub(inner);
+                    result.push_str(&output);
+                }
+                '~' if i == 0 || matches!(chars[i - 1], ' ' | ':' | '=') => {
+                    i += 1;
+                    let start = i;
+                    while i < len && !matches!(chars[i], '/' | ':' | ' ') { i += 1; }
+                    let user_part = &word[start..i];
+                    if user_part.is_empty() {
+                        result.push_str(&self.env.home());
+                    } else if let Some(named) = self.env.get_named_dir(user_part) {
+                        result.push_str(named);
+                    } else {
+                        result.push_str(&resolve_user_home(user_part));
+                    }
+                }
+                '\\' if i + 1 < len => {
+                    i += 1;
+                    result.push(chars[i]);
+                    i += 1;
+                }
+                _ => {
+                    result.push(ch);
+                    i += 1;
+                }
             }
         }
         result
+    }
+
+    fn expand_dollar(&mut self, chars: &[char], i: &mut usize, len: usize) -> String {
+        if *i >= len {
+            return String::new();
+        }
+        match chars[*i] {
+            '(' => {
+                if *i + 1 < len && chars[*i + 1] == '(' {
+                    *i += 1;
+                    let start = *i + 1;
+                    let mut depth = 0u32;
+                    let mut j = start;
+                    while j < len {
+                        match chars[j] {
+                            '(' => depth += 1,
+                            ')' if depth == 0 => break,
+                            ')' => depth -= 1,
+                            _ => {}
+                        }
+                        j += 1;
+                    }
+                    let inner: String = chars[start..j].iter().collect();
+                    *i = j + 2;
+                    let expanded_inner = self.expand_word(&inner);
+                    crate::shell::builtin::eval_arith_assign(&expanded_inner, self.env).to_string()
+                } else {
+                    let start = *i + 1;
+                    let mut depth = 1u32;
+                    let mut j = start;
+                    while j < len && depth > 0 {
+                        match chars[j] {
+                            '(' => depth += 1,
+                            ')' => {
+                                depth -= 1;
+                                if depth == 0 { break; }
+                            }
+                            _ => {}
+                        }
+                        j += 1;
+                    }
+                    let inner: String = chars[start..j].iter().collect();
+                    *i = j + 1;
+                    self.run_cmd_sub(&inner)
+                }
+            }
+            '{' => {
+                *i += 1;
+                let start = *i;
+                while *i < len && chars[*i] != '}' { *i += 1; }
+                let var: String = chars[start..*i].iter().collect();
+                if *i < len { *i += 1; }
+                self.expand_var(&var)
+            }
+            '?' => { *i += 1; self.last_status.to_string() }
+            '$' => { *i += 1; std::process::id().to_string() }
+            '!' => { *i += 1; self.background_pid.to_string() }
+            '0'..='9' => {
+                let mut n: usize = 0;
+                while *i < len && chars[*i].is_ascii_digit() {
+                    n = n * 10 + chars[*i].to_digit(10).unwrap() as usize;
+                    *i += 1;
+                }
+                if n == 0 {
+                    self.positional.first().cloned().unwrap_or_default()
+                } else if n - 1 < self.positional.len() {
+                    self.positional[n - 1].clone()
+                } else {
+                    String::new()
+                }
+            }
+            '@' => {
+                *i += 1;
+                self.positional.join(" ")
+            }
+            '*' => {
+                *i += 1;
+                let ifs = self.env.get("IFS").unwrap_or(" \t\n");
+                let sep = ifs.chars().next().map(|c| c.to_string()).unwrap_or_else(|| " ".to_string());
+                self.positional.join(&sep)
+            }
+            '#' => { *i += 1; self.positional.len().to_string() }
+            '-' => { *i += 1; "-".to_string() }
+            '_' => { *i += 1; self.env.get("_").unwrap_or("").to_string() }
+            _ => {
+                let start = *i;
+                while *i < len && (chars[*i].is_alphanumeric() || chars[*i] == '_') {
+                    *i += 1;
+                }
+                if *i > start {
+                    let var: String = chars[start..*i].iter().collect();
+                    self.expand_var(&var)
+                } else {
+                    *i += 1;
+                    "$".to_string()
+                }
+            }
+        }
     }
 
     fn run_cmd_sub(&mut self, cmd: &str) -> String {
@@ -153,16 +250,14 @@ impl<'a> Expander<'a> {
                     libc::close(write_fd);
                     libc::close(read_fd);
                 }
-                let args: Vec<String> = split_shell_args(cmd);
-                let c_args: Vec<std::ffi::CString> = args.iter()
-                    .filter_map(|a| std::ffi::CString::new(a.as_str()).ok())
-                    .collect();
-                let mut c_ptrs: Vec<*const libc::c_char> = c_args.iter().map(|s| s.as_ptr()).collect();
-                c_ptrs.push(std::ptr::null());
-                let cmd_path = self.find_in_path(&args[0]).unwrap_or_else(|| args[0].clone());
-                let c_cmd = std::ffi::CString::new(cmd_path).unwrap_or_else(|_| std::ffi::CString::new("sh").expect("failed to create CString for sh"));
-                unsafe { libc::execvp(c_cmd.as_ptr(), c_ptrs.as_ptr()); }
-                std::process::exit(127);
+                crate::shell::signals::setup_child_handlers();
+                let tokens = crate::shell::lexer::tokenize(cmd);
+                let ast = crate::shell::parser::parse(tokens);
+                let env = self.env.clone();
+                let cfg = crate::config::loader::load();
+                let mut sub_exec = crate::shell::executor::Executor::new(env, cfg);
+                let status = sub_exec.execute(&ast);
+                std::process::exit(status);
             }
             pid => {
                 let output = unsafe {
@@ -187,20 +282,9 @@ impl<'a> Expander<'a> {
                     libc::waitpid(pid, std::ptr::null_mut(), 0);
                     output
                 };
-                output.trim_end().to_string()
+                output.trim_end_matches('\n').to_string()
             }
         }
-    }
-
-    fn find_in_path(&mut self, cmd: &str) -> Option<String> {
-        let path_env = self.env.get("PATH").unwrap_or("/system/local/bin:/system/bin:/bin");
-        for dir in path_env.split(':') {
-            let full = std::path::Path::new(dir).join(cmd);
-            if full.is_file() {
-                return Some(full.to_string_lossy().to_string());
-            }
-        }
-        None
     }
 
     pub fn take_pending_sets(&self) -> Vec<(String, String)> {
@@ -233,7 +317,7 @@ impl<'a> Expander<'a> {
             } else if self.env.is_assoc_array(name) {
                 self.env.assoc_len(name).to_string()
             } else {
-                self.env.expand_special(name)
+                self.env.get(name).unwrap_or("").chars().count().to_string()
             }
         } else if let Some(stripped) = var.strip_suffix("^^") {
             let val = self.env.get(stripped).unwrap_or("").to_string();
@@ -304,6 +388,52 @@ impl<'a> Expander<'a> {
                     default.to_string()
                 }
             }
+        } else if let Some(colon_pos) = var.find(":?") {
+            let name = &var[..colon_pos];
+            let msg = &var[colon_pos + 2..];
+            match self.env.get(name) {
+                Some(v) if !v.is_empty() => v.to_string(),
+                _ => {
+                    let m = if msg.is_empty() { format!("{}: parameter null or not set", name) } else { msg.to_string() };
+                    eprintln!("context: {}", m);
+                    self.had_nounset_error.set(true);
+                    String::new()
+                }
+            }
+        } else if let Some(pos) = var.find('-')
+            && !var[..pos].contains(':') {
+                let name = &var[..pos];
+                let default = &var[pos + 1..];
+                if self.env.get(name).is_none() { default.to_string() } else { self.env.get(name).unwrap_or("").to_string() }
+        } else if let Some(pos) = var.find('+')
+            && !var[..pos].contains(':') {
+                let name = &var[..pos];
+                let alt = &var[pos + 1..];
+                if self.env.get(name).is_none() { String::new() } else { alt.to_string() }
+        } else if let Some(pos) = var.find('=')
+            && !var[..pos].contains(':') {
+                let name = &var[..pos];
+                let default = &var[pos + 1..];
+                match self.env.get(name) {
+                    Some(_) => self.env.get(name).unwrap_or("").to_string(),
+                    None => {
+                        self.pending_sets.borrow_mut().push((name.to_string(), default.to_string()));
+                        default.to_string()
+                    }
+                }
+        } else if let Some(pos) = var.find('?')
+            && !var[..pos].contains(':') {
+                let name = &var[..pos];
+                let msg = &var[pos + 1..];
+                match self.env.get(name) {
+                    Some(_) => self.env.get(name).unwrap_or("").to_string(),
+                    None => {
+                        let m = if msg.is_empty() { format!("{}: parameter null or not set", name) } else { msg.to_string() };
+                        eprintln!("context: {}", m);
+                        self.had_nounset_error.set(true);
+                        String::new()
+                    }
+                }
         } else if let Some(inner) = var.strip_prefix('@') {
             if let Some(name) = inner.strip_suffix('Q') {
                 let val = self.env.get(name).unwrap_or("");
@@ -409,11 +539,34 @@ impl<'a> Expander<'a> {
             let name = &var[..pos];
             let is_double = pos + 1 < var.len() && var.as_bytes()[pos + 1] == b'/';
             let rest = if is_double { &var[pos + 2..] } else { &var[pos + 1..] };
-            let (old, new) = if let Some(pos2) = rest.find('/') {
+            let split_at = rest
+                .as_bytes()
+                .iter()
+                .enumerate()
+                .filter(|(i, c)| **c == b'/' && !(*i > 0 && rest.as_bytes()[*i - 1] == b'\\'))
+                .map(|(i, _)| i)
+                .next();
+            let (old, new) = if let Some(pos2) = split_at {
                 (&rest[..pos2], &rest[pos2 + 1..])
             } else {
                 (rest, "")
             };
+            let unescape = |s: &str| -> String {
+                let mut out = String::with_capacity(s.len());
+                let mut chars = s.chars().peekable();
+                while let Some(c) = chars.next() {
+                    if c == '\\' {
+                        if let Some(n) = chars.next() {
+                            out.push(n);
+                        }
+                    } else {
+                        out.push(c);
+                    }
+                }
+                out
+            };
+            let old = unescape(old);
+            let new = unescape(new);
             let val = self.env.get(name).unwrap_or("").to_string();
             let val_chars: Vec<char> = val.chars().collect();
             let pattern_chars: Vec<char> = old.chars().collect();
@@ -465,6 +618,15 @@ impl<'a> Expander<'a> {
             self.env.assoc_pairs(name).iter()
                 .map(|(k, v)| format!("{}={}", k, v))
                 .collect::<Vec<_>>().join(" ")
+        } else if !var.is_empty() && var.chars().all(|c| c.is_ascii_digit()) {
+            let n: usize = var.parse().unwrap_or(0);
+            if n == 0 {
+                self.positional.first().cloned().unwrap_or_default()
+            } else if n - 1 < self.positional.len() {
+                self.positional[n - 1].clone()
+            } else {
+                String::new()
+            }
         } else {
             if self.nounset && self.env.get(var).is_none() {
                 eprintln!("context: {}: unset variable", var);
@@ -519,17 +681,6 @@ fn glob_match_inner(pattern: &[char], text: &[char]) -> bool {
     false
 }
 
-fn split_shell_args(cmd: &str) -> Vec<String> {
-    let tokens = crate::shell::lexer::tokenize(cmd);
-    tokens.into_iter().filter_map(|t| match t {
-        crate::shell::lexer::Token::Word(s) |
-        crate::shell::lexer::Token::SingleQuoted(s) |
-        crate::shell::lexer::Token::DoubleQuoted(s) |
-        crate::shell::lexer::Token::Backtick(s) => Some(s),
-        _ => None,
-    }).collect()
-}
-
 fn resolve_user_home(user: &str) -> String {
     if let Ok(contents) = std::fs::read_to_string("/etc/passwd") {
         for line in contents.lines() {
@@ -571,36 +722,6 @@ mod tests {
         assert_eq!(result, "/root");
         let result = resolve_user_home("nonexistent_user_xyz_999");
         assert_eq!(result, "/home/nonexistent_user_xyz_999");
-    }
-
-    #[test]
-    fn test_split_shell_args_simple() {
-        let args = split_shell_args("echo hello world");
-        assert_eq!(args, vec!["echo", "hello", "world"]);
-    }
-
-    #[test]
-    fn test_split_shell_args_quoted() {
-        let args = split_shell_args(r#"echo "hello world" foo"#);
-        assert_eq!(args, vec!["echo", "hello world", "foo"]);
-    }
-
-    #[test]
-    fn test_split_shell_args_single_quoted() {
-        let args = split_shell_args("echo 'hello world'");
-        assert_eq!(args, vec!["echo", "hello world"]);
-    }
-
-    #[test]
-    fn test_split_shell_args_empty() {
-        let args = split_shell_args("");
-        assert!(args.is_empty());
-    }
-
-    #[test]
-    fn test_split_shell_args_mixed() {
-        let args = split_shell_args(r#"cmd 'a b' "c d" plain"#);
-        assert_eq!(args, vec!["cmd", "a b", "c d", "plain"]);
     }
 
     #[test]

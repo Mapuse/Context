@@ -88,6 +88,10 @@ impl Env {
             }
     }
 
+    pub fn is_exported(&self, key: &str) -> bool {
+        self.exported.get(key).copied().unwrap_or(false)
+    }
+
     pub fn unset(&mut self, key: &str) {
         if self.is_readonly(key) {
             eprintln!("context: unset: {}: readonly variable", key);
@@ -102,7 +106,6 @@ impl Env {
 
     pub fn set_readonly(&mut self, key: &str) {
         self.readonly.insert(key.to_string(), true);
-        self.export(key);
     }
 
     pub fn is_readonly(&self, key: &str) -> bool {
@@ -209,6 +212,12 @@ impl Env {
         &self.vars
     }
 
+    pub fn local_vars(&self) -> Vec<(&str, &str)> {
+        self.scope_stack.last()
+            .map(|scope| scope.iter().map(|(k, v)| (k.as_str(), v.as_str())).collect())
+            .unwrap_or_default()
+    }
+
     pub fn passthrough_env(&self, passthrough: &[String], filter: &[String]) -> Vec<(String, String)> {
         self.vars.iter()
             .filter(|(k, _)| {
@@ -247,12 +256,10 @@ impl Env {
         self.named_dirs.get(name).map(|s| s.as_str())
     }
 
-    #[allow(dead_code)]
     pub fn unset_named_dir(&mut self, name: &str) {
         self.named_dirs.remove(name);
     }
 
-    #[allow(dead_code)]
     pub fn all_named_dirs(&self) -> &HashMap<String, String> {
         &self.named_dirs
     }

@@ -38,6 +38,23 @@ pub struct Executor {
     prev_cwd: String,
     next_job_id: usize,
     fork_count: Arc<AtomicUsize>,
+    loop_control: Option<LoopControl>,
+    loop_depth: usize,
+    return_value: Option<i32>,
+    function_depth: usize,
+}
+
+#[derive(Clone, Copy, Debug)]
+enum LoopControl {
+    Break(u32),
+    Continue(u32),
+}
+
+/// Return value of a loop body evaluation with respect to `break`/`continue`.
+enum LoopAction {
+    None,
+    Stop,
+    Continue,
 }
 
 impl Executor {
@@ -78,11 +95,19 @@ impl Executor {
                 .unwrap_or_default(),
             next_job_id: 1,
             fork_count: Arc::new(AtomicUsize::new(0)),
+            loop_control: None,
+            loop_depth: 0,
+            return_value: None,
+            function_depth: 0,
         }
     }
 
-    pub fn run_source_rc(&mut self) {
-        let rc = crate::config::loader::rc_path();
+    pub fn run_source_rc(&mut self, override_rc: Option<&str>) {
+        let rc = if let Some(path) = override_rc {
+            std::path::PathBuf::from(path)
+        } else {
+            crate::config::loader::rc_path()
+        };
         if rc.is_file()
             && let Ok(contents) = std::fs::read_to_string(&rc) {
                 let tokens = crate::shell::lexer::tokenize(&contents);
@@ -140,6 +165,26 @@ impl Executor {
 
     pub fn execute(&mut self, node: &Node) -> i32 {
         let status = self.execute_node(node);
+        let sig = signals::TRAP_SIGNAL.swap(0, std::sync::atomic::Ordering::SeqCst);
+        if sig != 0 {
+            let signame = match sig {
+                libc::SIGINT => "INT",
+                libc::SIGQUIT => "QUIT",
+                libc::SIGTSTP => "TSTP",
+                libc::SIGHUP => "HUP",
+                libc::SIGTERM => "TERM",
+                _ => "UNKNOWN",
+            };
+            if let Some(cmd) = self.env.get_trap(signame).map(|s| s.to_string())
+                && !cmd.is_empty() {
+                    let tokens = crate::shell::lexer::tokenize(&cmd);
+                    let ast = crate::shell::parser::parse(tokens);
+                    let trap_status = self.execute(&ast);
+                    self.last_status = trap_status;
+                    signals::set_last_status(trap_status);
+                    return trap_status;
+                }
+        }
         let current_cwd = std::env::current_dir()
             .map(|p| p.to_string_lossy().to_string())
             .unwrap_or_default();
@@ -149,7 +194,7 @@ impl Executor {
         if self.opt_e() && status != 0 {
             match node {
                 Node::Empty | Node::If { .. } | Node::While { .. } | Node::Until { .. }
-                | Node::Compound { .. } | Node::Function { .. } => {}
+                | Node::Compound { .. } | Node::Function { .. } | Node::Arithmetic { .. } => {}
                 _ => {
                     eprintln!("context: terminating on errexit (status {})", status);
                     signals::EXIT_CODE.store(status, std::sync::atomic::Ordering::SeqCst);
@@ -158,6 +203,26 @@ impl Executor {
             }
         }
         status
+    }
+
+    fn loop_action(&mut self) -> LoopAction {
+        match self.loop_control.take() {
+            Some(LoopControl::Break(n)) => {
+                if n > 1 {
+                    self.loop_control = Some(LoopControl::Break(n - 1));
+                }
+                LoopAction::Stop
+            }
+            Some(LoopControl::Continue(n)) => {
+                if n > 1 {
+                    self.loop_control = Some(LoopControl::Continue(n - 1));
+                    LoopAction::Stop
+                } else {
+                    LoopAction::Continue
+                }
+            }
+            None => LoopAction::None,
+        }
     }
 
     fn execute_node(&mut self, node: &Node) -> i32 {
@@ -194,11 +259,12 @@ impl Executor {
 
                 if let Some(func_body) = self.functions.get(&words[0]).cloned() {
                     let saved = self.env.push_scope();
+                    let saved_positional = self.env.positional().to_vec();
                     let nounset = self.opt_u();
                     let bg_pid = signals::BACKGROUND_PID.load(std::sync::atomic::Ordering::SeqCst);
                     let mut expander = Expander::new(&mut self.env, self.last_status, vec![], bg_pid);
                     expander.set_nounset(nounset);
-                    let expanded_words: Vec<String> = words[1..].iter().map(|w| expander.expand_word(w)).collect();
+                    let expanded_words: Vec<String> = words[1..].iter().map(|w| strip_markers(&expander.expand_word(w))).collect();
                     let nounset_err = expander.had_nounset_error();
                     drop(expander);
                     self.env.set_positional(expanded_words.clone());
@@ -209,8 +275,12 @@ impl Executor {
                         self.env.set_local("@", &expanded_words.join(" "));
                         self.env.set_local("#", &expanded_words.len().to_string());
                     }
+                    self.function_depth += 1;
                     let status = if nounset_err { 1 } else { self.execute(&func_body) };
+                    self.function_depth -= 1;
+                    let status = self.return_value.take().unwrap_or(status);
                     self.env.pop_scope(saved);
+                    self.env.set_positional(saved_positional);
                     self.last_status = status;
                     signals::set_last_status(status);
                     return status;
@@ -281,7 +351,9 @@ impl Executor {
                             }
 
                             for r in redirects {
-                                self.apply_redirect(r);
+                                if !self.apply_redirect(r) {
+                                    return 1;
+                                }
                             }
                             return 0;
                         }
@@ -346,6 +418,44 @@ impl Executor {
                         "enable" => {
                             return self.cmd_enable(&words[1..]);
                         }
+                        "break" => {
+                            let n = words.get(1).and_then(|s| s.parse::<u32>().ok()).unwrap_or(1);
+                            if self.loop_depth == 0 {
+                                eprintln!("context: break: only meaningful in a loop");
+                                self.last_status = 1;
+                                signals::set_last_status(1);
+                                return 1;
+                            }
+                            self.loop_control = Some(LoopControl::Break(n.max(1)));
+                            self.last_status = 0;
+                            signals::set_last_status(0);
+                            return 0;
+                        }
+                        "continue" => {
+                            if self.loop_depth == 0 {
+                                eprintln!("context: continue: only meaningful in a loop");
+                                self.last_status = 1;
+                                signals::set_last_status(1);
+                                return 1;
+                            }
+                            self.loop_control = Some(LoopControl::Continue(words.get(1).and_then(|s| s.parse::<u32>().ok()).unwrap_or(1)));
+                            self.last_status = 0;
+                            signals::set_last_status(0);
+                            return 0;
+                        }
+                        "return" => {
+                            if self.function_depth == 0 {
+                                eprintln!("context: return: can only `return` from a function or sourced script");
+                                self.last_status = 1;
+                                signals::set_last_status(1);
+                                return 1;
+                            }
+                            let n = words.get(1).and_then(|s| s.parse::<i32>().ok()).unwrap_or(self.last_status);
+                            self.return_value = Some(n);
+                            self.last_status = n;
+                            signals::set_last_status(n);
+                            return n;
+                        }
                         _ => {}
                     }
                     let words = if words[0] == "kill" {
@@ -361,7 +471,35 @@ impl Executor {
                     } else {
                         words.clone()
                     };
+                    let mut expanded_redirects = redirects.to_vec();
+                    for r in &mut expanded_redirects {
+                        if let RedirKind::HereDocBody(ref body, expand) = r.kind
+                            && expand {
+                                let bg_pid = signals::BACKGROUND_PID.load(std::sync::atomic::Ordering::SeqCst);
+                                let mut expander = Expander::new(&mut self.env, self.last_status, vec![], bg_pid);
+                                let expanded = strip_markers(&expander.expand_word(body));
+                                r.kind = RedirKind::HereDocBody(expanded, false);
+                            }
+                    }
+                    let save_fds: Vec<i32> = if expanded_redirects.is_empty() {
+                        Vec::new()
+                    } else {
+                        (0..3).map(|fd| unsafe { libc::dup(fd) }).collect()
+                    };
+                    if !save_fds.is_empty() {
+                        for r in &expanded_redirects {
+                            self.apply_redirect(r);
+                        }
+                    }
                     let result = builtin::run(&words, &mut self.env, &self.cfg, self.last_status);
+                    if !save_fds.is_empty() {
+                        for (i, saved) in save_fds.iter().enumerate() {
+                            unsafe {
+                                libc::dup2(*saved, i as i32);
+                                libc::close(*saved);
+                            }
+                        }
+                    }
                     if result.clear_history {
                         self.clear_history = true;
                     }
@@ -396,7 +534,17 @@ impl Executor {
                     return 0;
                 }
 
-                self.exec_external(&words, redirects)
+                let mut expanded_redirects = redirects.to_vec();
+                for r in &mut expanded_redirects {
+                    if let RedirKind::HereDocBody(ref body, expand) = r.kind
+                        && expand {
+                            let bg_pid = signals::BACKGROUND_PID.load(std::sync::atomic::Ordering::SeqCst);
+                            let mut expander = Expander::new(&mut self.env, self.last_status, vec![], bg_pid);
+                            let expanded = strip_markers(&expander.expand_word(body));
+                            r.kind = RedirKind::HereDocBody(expanded, false);
+                        }
+                }
+                self.exec_external(&words, &expanded_redirects)
             }
             Node::Pipeline { commands, bang } => {
                 let n = commands.len();
@@ -425,7 +573,7 @@ impl Executor {
                         0 => {
                             unsafe {
                                 if i > 0 { libc::dup2(pipes[i-1][0], libc::STDIN_FILENO); }
-                                if i < n-1 { libc::dup2(pipes[i+1][1], libc::STDOUT_FILENO); }
+                                if i < n-1 { libc::dup2(pipes[i][1], libc::STDOUT_FILENO); }
                                 for p in &pipes { libc::close(p[0]); libc::close(p[1]); }
                                 libc::setpgid(0, 0);
                             }
@@ -451,7 +599,7 @@ impl Executor {
                     let exit = if libc::WIFEXITED(status) { libc::WEXITSTATUS(status) }
                                  else if libc::WIFSIGNALED(status) { 128 + libc::WTERMSIG(status) }
                                  else { 1 };
-                    if exit != 0 && any_nonzero == 0 {
+                    if exit != 0 {
                         any_nonzero = exit;
                     }
                     last_status = exit;
@@ -481,7 +629,17 @@ impl Executor {
                         status
                     }
                     CompoundKind::Semicolon => {
-                        self.execute(left);
+                        let ls = self.execute(left);
+                        if self.return_value.is_some() {
+                            self.last_status = ls;
+                            signals::set_last_status(ls);
+                            return ls;
+                        }
+                        if self.loop_control.is_some() && self.loop_depth > 0 {
+                            self.last_status = ls;
+                            signals::set_last_status(ls);
+                            return ls;
+                        }
                         let status = self.execute(right);
                         self.last_status = status;
                         signals::set_last_status(status);
@@ -536,7 +694,7 @@ impl Executor {
             }
             Node::Assignment { name, value } => {
                 let mut expander = Expander::new(&mut self.env, self.last_status, vec![], 0);
-                let value = expander.expand_word(value);
+                let value = strip_markers(&expander.expand_word(value));
                 let pending = expander.take_pending_sets();
                 drop(expander);
                 for (k, v) in pending {
@@ -544,6 +702,16 @@ impl Executor {
                 }
                 self.env.set(name, &value);
                 0
+            }
+            Node::Arithmetic { expr } => {
+                let mut expander = Expander::new(&mut self.env, self.last_status, vec![], 0);
+                let expanded = strip_markers(&expander.expand_word(expr));
+                drop(expander);
+                let value = crate::shell::builtin::eval_arith_assign(&expanded, &mut self.env);
+                let status = if value == 0 { 1 } else { 0 };
+                self.last_status = status;
+                signals::set_last_status(status);
+                status
             }
             Node::For { var, values, body } => {
                 let positional: Vec<String> = if values.is_empty() {
@@ -555,35 +723,89 @@ impl Executor {
                     positional
                 } else {
                     let mut expander = Expander::new(&mut self.env, self.last_status, vec![], 0);
-                    values.iter().map(|v| expander.expand_word(v)).collect()
+                    values.iter().map(|v| strip_markers(&expander.expand_word(v))).collect()
                 };
                 let mut last = 0;
+                self.loop_depth += 1;
                 for val in &iter_values {
                     self.env.set(var, val);
                     last = self.execute(body);
+                    match self.loop_action() {
+                        LoopAction::None => {}
+                        LoopAction::Stop => break,
+                        LoopAction::Continue => continue,
+                    }
                 }
+                self.loop_depth = self.loop_depth.saturating_sub(1);
+                self.last_status = last;
+                signals::set_last_status(last);
+                last
+            }
+            Node::ForArith { init, cond, incr, body } => {
+                let apply = |e: &str, env: &mut crate::shell::env::Env| {
+                    crate::shell::builtin::eval_arith_assign(e, env);
+                };
+                if let Some(init_expr) = init {
+                    apply(init_expr, &mut self.env);
+                }
+                let mut last = 0;
+                self.loop_depth += 1;
+                loop {
+                    let cond_true = match cond {
+                        Some(c) => {
+                            let v = crate::shell::builtin::eval_arith_assign(c, &mut self.env);
+                            v != 0
+                        }
+                        None => true,
+                    };
+                    if !cond_true { break; }
+                    last = self.execute(body);
+                    match self.loop_action() {
+                        LoopAction::None => {}
+                        LoopAction::Stop => break,
+                        LoopAction::Continue => {}
+                    }
+                    if let Some(incr_expr) = incr {
+                        apply(incr_expr, &mut self.env);
+                    }
+                }
+                self.loop_depth = self.loop_depth.saturating_sub(1);
                 self.last_status = last;
                 signals::set_last_status(last);
                 last
             }
             Node::While { condition, body } => {
                 let mut last = 0;
+                self.loop_depth += 1;
                 loop {
                     let status = self.execute(condition);
                     if status != 0 { break; }
                     last = self.execute(body);
+                    match self.loop_action() {
+                        LoopAction::None => {}
+                        LoopAction::Stop => break,
+                        LoopAction::Continue => continue,
+                    }
                 }
+                self.loop_depth = self.loop_depth.saturating_sub(1);
                 self.last_status = last;
                 signals::set_last_status(last);
                 last
             }
             Node::Until { condition, body } => {
                 let mut last = 0;
+                self.loop_depth += 1;
                 loop {
                     let status = self.execute(condition);
                     if status == 0 { break; }
                     last = self.execute(body);
+                    match self.loop_action() {
+                        LoopAction::None => {}
+                        LoopAction::Stop => break,
+                        LoopAction::Continue => continue,
+                    }
                 }
+                self.loop_depth = self.loop_depth.saturating_sub(1);
                 self.last_status = last;
                 signals::set_last_status(last);
                 last
@@ -618,9 +840,9 @@ impl Executor {
             Node::Case { word, arms } => {
                 let (expanded_word, expanded_arms): (String, Vec<ExpandedCaseArm>) = {
                     let mut expander = Expander::new(&mut self.env, self.last_status, vec![], 0);
-                    let word = expander.expand_word(word);
+                    let word = strip_markers(&expander.expand_word(word));
                     let arms_expanded: Vec<(Vec<String>, Box<Node>)> = arms.iter().map(|(patterns, body)| {
-                        let expanded: Vec<String> = patterns.iter().map(|p| expander.expand_word(p)).collect();
+                        let expanded: Vec<String> = patterns.iter().map(|p| strip_markers(&expander.expand_word(p))).collect();
                         (expanded, body.clone())
                     }).collect();
                     (word, arms_expanded)
@@ -646,7 +868,7 @@ impl Executor {
                 let bg_pid = signals::BACKGROUND_PID.load(std::sync::atomic::Ordering::SeqCst);
                 let mut expander = Expander::new(&mut self.env, self.last_status, vec![], bg_pid);
                 expander.set_nounset(nounset);
-                let expanded: Vec<String> = tokens.iter().map(|t| expander.expand_word(t)).collect();
+                let expanded: Vec<String> = tokens.iter().map(|t| strip_markers(&expander.expand_word(t))).collect();
                 let nounset_err = expander.had_nounset_error();
                 drop(expander);
                 if nounset_err { return 2; }
@@ -660,10 +882,11 @@ impl Executor {
                     self.env.positional().to_vec()
                 } else {
                     let mut expander = Expander::new(&mut self.env, self.last_status, vec![], 0);
-                    values.iter().map(|v| expander.expand_word(v)).collect()
+                    values.iter().map(|v| strip_markers(&expander.expand_word(v))).collect()
                 };
                 let stdin = std::io::stdin();
                 let mut last = 0;
+                self.loop_depth += 1;
                 loop {
                     for (i, item) in iter_values.iter().enumerate() {
                         println!("  {}) {}", i + 1, item);
@@ -682,13 +905,18 @@ impl Executor {
                                 && n > 0 && n <= iter_values.len() {
                                     self.env.set(var, &iter_values[n - 1]);
                                     last = self.execute(body);
-                                    break;
+                                    match self.loop_action() {
+                                        LoopAction::None => break,
+                                        LoopAction::Stop => break,
+                                        LoopAction::Continue => continue,
+                                    }
                                 }
                             eprintln!("context: select: invalid selection");
                         }
                         Err(_) => break,
                     }
                 }
+                self.loop_depth = self.loop_depth.saturating_sub(1);
                 self.last_status = last;
                 signals::set_last_status(last);
                 last
@@ -756,7 +984,8 @@ impl Executor {
 
         if use_posix_spawn {
             let mut c_args: Vec<CString> = words.iter()
-                .filter_map(|w| CString::new(w.as_str()).ok())
+                .map(|w| strip_markers(w))
+                .filter_map(|w| CString::new(w).ok())
                 .collect();
             let mut c_ptrs: Vec<*mut libc::c_char> = c_args.iter_mut().map(|s| s.as_ptr() as *mut libc::c_char).collect();
             c_ptrs.push(std::ptr::null_mut());
@@ -960,6 +1189,7 @@ impl Executor {
                     fork_count_clone.fetch_sub(1, Ordering::SeqCst);
                 });
                 signals::BACKGROUND_PID.store(pid, std::sync::atomic::Ordering::SeqCst);
+                self.env.set("!", &pid.to_string());
                 let job = Job {
                     id: self.next_job_id,
                     pid,
@@ -999,7 +1229,8 @@ impl Executor {
             }
         }
         let c_args: Vec<CString> = words.iter()
-            .filter_map(|w| CString::new(w.as_str()).ok())
+            .map(|w| strip_markers(w))
+            .filter_map(|w| CString::new(w).ok())
             .collect();
         let mut c_ptrs: Vec<*const libc::c_char> = c_args.iter().map(|s| s.as_ptr()).collect();
         c_ptrs.push(std::ptr::null());
@@ -1024,7 +1255,8 @@ impl Executor {
     }
 
     fn wait_for_pid(&self, pid: libc::pid_t) -> i32 {
-        if self.cfg.editor.hide_cursor_on_exec {
+        let tty_out = unsafe { libc::isatty(libc::STDOUT_FILENO) } == 1;
+        if self.cfg.editor.hide_cursor_on_exec && tty_out {
             print!("\x1b[?25l");
             let _ = std::io::stdout().flush();
         }
@@ -1035,7 +1267,7 @@ impl Executor {
                 break;
             }
         }
-        if self.cfg.editor.hide_cursor_on_exec {
+        if self.cfg.editor.hide_cursor_on_exec && tty_out {
             print!("\x1b[?25h");
             let _ = std::io::stdout().flush();
         }
@@ -1063,31 +1295,37 @@ impl Executor {
         });
     }
 
-    fn apply_redirect(&self, redirect: &Redirect) {
+    fn apply_redirect(&self, redirect: &Redirect) -> bool {
+        let target_fd: i32 = redirect.fd.unwrap_or(match redirect.kind {
+            RedirKind::Output | RedirKind::OutputAppend | RedirKind::OutputFd
+            | RedirKind::OutputFdAppend | RedirKind::Clobber | RedirKind::RedirectFd => libc::STDOUT_FILENO as u32,
+            RedirKind::Input | RedirKind::InputFd | RedirKind::HereDocBody(_, _)
+            | RedirKind::HereString(_) => libc::STDIN_FILENO as u32,
+        }) as i32;
         match redirect.kind {
             RedirKind::Output => {
                 if self.opt_n() && Path::new(&redirect.target).exists() {
                     eprintln!("context: {}: cannot overwrite existing file", redirect.target);
-                    return;
+                    return false;
                 }
                 if let Ok(file) = File::create(&redirect.target) {
-                    unsafe { libc::dup2(file.as_raw_fd(), libc::STDOUT_FILENO); }
+                    unsafe { libc::dup2(file.as_raw_fd(), target_fd); }
                 }
             }
             RedirKind::OutputAppend => {
                 if let Ok(file) = OpenOptions::new().create(true).append(true).open(&redirect.target) {
-                    unsafe { libc::dup2(file.as_raw_fd(), libc::STDOUT_FILENO); }
+                    unsafe { libc::dup2(file.as_raw_fd(), target_fd); }
                 }
             }
             RedirKind::Input => {
                 if let Ok(file) = File::open(&redirect.target) {
-                    unsafe { libc::dup2(file.as_raw_fd(), libc::STDIN_FILENO); }
+                    unsafe { libc::dup2(file.as_raw_fd(), target_fd); }
                 }
             }
             RedirKind::OutputFd => {
                 if let Ok(file) = File::create(&redirect.target) {
                     unsafe {
-                        libc::dup2(file.as_raw_fd(), libc::STDOUT_FILENO);
+                        libc::dup2(file.as_raw_fd(), target_fd);
                         libc::dup2(file.as_raw_fd(), libc::STDERR_FILENO);
                     }
                 }
@@ -1095,36 +1333,24 @@ impl Executor {
             RedirKind::OutputFdAppend => {
                 if let Ok(file) = OpenOptions::new().create(true).append(true).open(&redirect.target) {
                     unsafe {
-                        libc::dup2(file.as_raw_fd(), libc::STDOUT_FILENO);
+                        libc::dup2(file.as_raw_fd(), target_fd);
                         libc::dup2(file.as_raw_fd(), libc::STDERR_FILENO);
                     }
                 }
             }
             RedirKind::RedirectFd => {
-                if let Ok(fd) = redirect.target.parse::<i32>() {
-                    unsafe { libc::dup2(fd, libc::STDOUT_FILENO); }
+                if redirect.target == "-" {
+                    unsafe { libc::close(target_fd); }
+                } else if let Ok(fd) = redirect.target.parse::<i32>() {
+                    unsafe { libc::dup2(fd, target_fd); }
                 }
             }
-            RedirKind::HereDoc(ref word) => {
+            RedirKind::HereDocBody(ref body, _) => {
                 let mut fds = [0i32; 2];
                 unsafe { libc::pipe(fds.as_mut_ptr()); }
                 let (r, w) = (fds[0], fds[1]);
                 unsafe {
-                    libc::dup2(r, libc::STDIN_FILENO);
-                    libc::close(r);
-                }
-                let data = format!("{}\n", word);
-                std::thread::spawn(move || unsafe {
-                    libc::write(w, data.as_ptr() as *const libc::c_void, data.len());
-                    libc::close(w);
-                });
-            }
-            RedirKind::HereDocBody(ref body) => {
-                let mut fds = [0i32; 2];
-                unsafe { libc::pipe(fds.as_mut_ptr()); }
-                let (r, w) = (fds[0], fds[1]);
-                unsafe {
-                    libc::dup2(r, libc::STDIN_FILENO);
+                    libc::dup2(r, target_fd);
                     libc::close(r);
                 }
                 let data = body.clone();
@@ -1138,7 +1364,7 @@ impl Executor {
                 unsafe { libc::pipe(fds.as_mut_ptr()); }
                 let (r, w) = (fds[0], fds[1]);
                 unsafe {
-                    libc::dup2(r, libc::STDIN_FILENO);
+                    libc::dup2(r, target_fd);
                     libc::close(r);
                 }
                 let data = format!("{}\n", word);
@@ -1149,15 +1375,18 @@ impl Executor {
             }
             RedirKind::Clobber => {
                 if let Ok(file) = File::create(&redirect.target) {
-                    unsafe { libc::dup2(file.as_raw_fd(), libc::STDOUT_FILENO); }
+                    unsafe { libc::dup2(file.as_raw_fd(), target_fd); }
                 }
             }
             RedirKind::InputFd => {
-                if let Ok(fd) = redirect.target.parse::<i32>() {
-                    unsafe { libc::dup2(fd, libc::STDIN_FILENO); }
+                if redirect.target == "-" {
+                    unsafe { libc::close(target_fd); }
+                } else if let Ok(fd) = redirect.target.parse::<i32>() {
+                    unsafe { libc::dup2(fd, target_fd); }
                 }
             }
         }
+        true
     }
 
     fn expand_aliases(&self, words: &[String]) -> Vec<String> {
@@ -1187,24 +1416,25 @@ impl Executor {
         let ifs = self.env.get("IFS").unwrap_or(" \t\n").to_string();
         let mut result = Vec::new();
         for word in words {
-
-            if word.starts_with('\x01') && word.ends_with('\x01') && word.len() >= 2 {
-                result.push(word[1..word.len()-1].to_string());
-                continue;
-            }
             if word.is_empty() {
                 result.push(String::new());
                 continue;
             }
             let mut split = Vec::new();
             let mut current = String::new();
+            let mut in_marker = false;
             for ch in word.chars() {
-                if ifs.contains(ch) {
-                    if !current.is_empty() {
-                        split.push(std::mem::take(&mut current));
+                match ch {
+                    '\x01' | '\x02' => in_marker = !in_marker,
+                    _ => {
+                        if ifs.contains(ch) && !in_marker {
+                            if !current.is_empty() {
+                                split.push(std::mem::take(&mut current));
+                            }
+                        } else {
+                            current.push(ch);
+                        }
                     }
-                } else {
-                    current.push(ch);
                 }
             }
             if !current.is_empty() {
@@ -1283,7 +1513,7 @@ impl Executor {
     fn cmd_enable(&mut self, args: &[String]) -> i32 {
         if args.is_empty() {
             let all = [
-                "cd", "exit", "export", "unset", "alias", "unalias",
+                ":", "cd", "exit", "export", "unset", "alias", "unalias",
                 "source", ".", "history", "set", "unsetenv", "env",
                 "pwd", "type", "which", "echo", "printf", "true",
                 "false", "test", "[", "let", "exec", "trap",
@@ -1293,7 +1523,7 @@ impl Executor {
                 "caller", "jobs", "fg", "bg",
                 "wait", "kill", "umask", "command", "eval",
                 "select", "getopts", "realpath", "complete", "compgen", "read",
-                "bindkey"
+                "shift", "bindkey"
             ];
             for name in &all {
                 let status = if self.disabled_builtins.contains(*name) { "off" } else { "on" };
@@ -1355,18 +1585,11 @@ impl Executor {
     }
 
     fn opt_e(&self) -> bool { self.opt_is("_OPT_E") }
-    #[allow(dead_code)]
     fn opt_u(&self) -> bool { self.opt_is("_OPT_U") }
     fn opt_x(&self) -> bool { self.opt_is("_OPT_X") }
     fn opt_n(&self) -> bool { self.opt_is("_OPT_N") }
     fn opt_g(&self) -> bool { self.opt_is("_OPT_G") }
-    #[allow(dead_code)]
-    fn opt_f(&self) -> bool { self.opt_is("_OPT_F") }
     fn opt_pipefail(&self) -> bool { self.opt_is("_OPT_PIPEFAIL") }
-    #[allow(dead_code)]
-    fn opt_notify(&self) -> bool { self.opt_is("_OPT_NOTIFY") }
-    #[allow(dead_code)]
-    fn opt_trace_format(&self) -> bool { self.opt_is("_OPT_TRACEFORMAT") }
 
     fn trace_print(&self, words: &[String]) {
         if self.opt_x() {
@@ -1377,9 +1600,13 @@ impl Executor {
     }
 }
 
+fn strip_markers(s: &str) -> String {
+    s.chars().filter(|&c| c != '\x01' && c != '\x02').collect()
+}
+
 fn builtin_is(cmd: &str) -> bool {
     matches!(cmd,
-        "cd" | "exit" | "export" | "unset" | "alias" | "unalias" |
+        ":" | "cd" | "exit" | "export" | "unset" | "alias" | "unalias" |
         "source" | "." | "history" | "set" | "unsetenv" | "env" |
         "pwd" | "type" | "which" | "echo" | "printf" | "true" |
         "false" | "test" | "[" | "let" | "exec" | "trap" |
@@ -1389,7 +1616,8 @@ fn builtin_is(cmd: &str) -> bool {
         "caller" | "jobs" | "fg" | "bg" |
         "wait" | "kill" | "umask" | "command" | "eval" |
         "select" | "getopts" | "realpath" | "complete" | "compgen" | "read" |
-        "bindkey"
+        "return" | "shift" |
+        "bindkey" | "break" | "continue"
     )
 }
 

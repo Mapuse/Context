@@ -7,7 +7,7 @@ rule cargo
   description = cargo build ctx
 
 rule install
-  command = install -Dm755 $in $${DESTDIR}/system/bin/ctx
+  command = install -Dm755 $in $${DESTDIR}/bin/ctx
   description = install ctx
 
 builddir = builddir

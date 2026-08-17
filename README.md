@@ -221,14 +221,14 @@ All build systems auto-detect `x86_64`/`aarch64` and select the correct musl tar
 cargo build --release
 # Binary: target/release/ctx
 # Install:
-install -Dm755 target/release/ctx /system/bin/ctx
+install -Dm755 target/release/ctx /bin/ctx
 ```
 
 ### Make
 
 ```shell
 make build                    # auto-detects arch, builds for host
-make install                  # installs to /system/bin/ctx
+make install                  # installs to /bin/ctx
 make install DESTDIR=/mnt     # staged install
 ```
 
@@ -236,9 +236,9 @@ make install DESTDIR=/mnt     # staged install
 
 ```shell
 ./gen-cross.sh                              # generate cross file for host arch
-meson setup builddir --cross-file cross.txt --prefix=/system
+meson setup builddir --cross-file cross.txt
 meson compile -C builddir
-meson install -C builddir
+meson install -C builddir                   # ctx -> /bin/ctx
 ```
 
 ### Ninja
@@ -251,9 +251,9 @@ DESTDIR=/mnt ninja -f build.ninja install  # staged install
 ### CMake
 
 ```shell
-cmake -B build -DCMAKE_TOOLCHAIN_FILE=toolchain.cmake -DCMAKE_INSTALL_PREFIX=/system
+cmake -B build -DCMAKE_TOOLCHAIN_FILE=toolchain.cmake -DCMAKE_INSTALL_PREFIX=/
 cmake --build build
-cmake --install build
+cmake --install build                      # ctx -> /bin/ctx
 ```
 
 ### MCX (package manager)
@@ -1295,15 +1295,18 @@ Set `[editor] mode = "vi"` to enable.
 
 ### Syntax Highlighting
 
-| Element | ANSI Color |
-|---------|------------|
-| Commands (first word) | Bold blue `\x1b[1;34m` |
-| `$variables` | Cyan `\x1b[36m` |
-| `"double-quoted strings"` | Yellow `\x1b[33m` |
-| `'single-quoted strings'` | Yellow `\x1b[33m` |
-| Operators `\|` `&` `;` `>` `<` | Green `\x1b[32m` |
-| Comments `#...` | Gray `\x1b[90m` |
-| Escape sequences `\x` | Green `\x1b[32m` |
+All colors are configurable via `[colors]` hex values. When `syntax_use_dynamic_colors = true`, they are derived from the wallpaper palette instead.
+
+| Element | Config Field | Default | What it highlights |
+|---------|-------------|---------|-------------------|
+| Commands | `syntax_command` | `#3b82f6` | First word after pipe, semicolon, ampersand, or start of line |
+| Variables | `syntax_variable` | `#22d3ee` | `$var`, `${var}`, `$(cmd)` |
+| Strings | `syntax_string` | `#f59e0b` | `"double-quoted"` and `'single-quoted'` text |
+| Operators | `syntax_operator` | `#22c55e` | `\|`, `&`, `;`, `>`, `<`, `>>`, `&&`, `\|\|`, `=`, `==`, `!=`, `+=`, `-=`, `\x` escapes |
+| Flags | `syntax_flag` | `#c084fc` | `--long-flag`, `-f`, `-abc` (any word starting with `-`) |
+| Paths | `syntax_path` | `#fb923c` | `/abs/path`, `./relative`, `../parent`, `~/home`, any word containing `/` |
+| Numbers | `syntax_number` | `#22d3ee` | `123`, `3.14`, `0xff`, `0o77`, `0b1010` |
+| Comments | `syntax_comment` | `#6b7280` | `# ...` to end of line |
 
 ### Custom Widgets
 
@@ -1632,7 +1635,7 @@ Search order (first match wins):
 
 Auto-created with full defaults on first run. Hot-reload via `kill -USR1 <pid>`.
 
-### Config Schema (25 Sections, 297 Fields)
+### Config Schema (25 Sections, 300 Fields)
 
 ```
 Config
@@ -1640,7 +1643,7 @@ Config
 ├── cursor:         CursorConfig          (11 fields)
 ├── prompt:         PromptConfig          (51 fields)
 ├── box_config:     BoxConfig             (25 fields)
-├── colors:         ColorsConfig          (28 fields)
+├── colors:         ColorsConfig          (30 fields)
 ├── symbols:        SymbolsConfig         (17 fields)
 ├── ascii:          AsciiConfig           (12 fields)
 ├── execution:      ExecutionConfig       (11 fields)
@@ -1813,6 +1816,9 @@ Config
 | `syntax_variable` | `"#22d3ee"` | Variable color |
 | `syntax_operator` | `"#22c55e"` | Operator color |
 | `syntax_command` | `"#3b82f6"` | Command color |
+| `syntax_flag` | `"#c084fc"` | Flag color (`--flag`, `-f`) |
+| `syntax_path` | `"#fb923c"` | Path color (`/path`, `./rel`) |
+| `syntax_number` | `"#22d3ee"` | Number color (`123`, `0xff`) |
 | `syntax_use_dynamic_colors` | `true` | Derive all syntax colors from dynamic palette instead of hex above |
 
 All accept any `#RRGGBB` hex value. Auto-degraded to terminal capability.

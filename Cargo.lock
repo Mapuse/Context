@@ -354,7 +354,7 @@ dependencies = [
 [[package]]
 name = "cps"
 version = "0.7.0"
-source = "git+https://github.com/Mapuse/CPS?rev=d8d5f7da49917ea7636147b8a65f3541311c45ab#d8d5f7da49917ea7636147b8a65f3541311c45ab"
+source = "git+https://github.com/Mapuse/CPS#e0df7f95e2998562c69da16f87779765b6127ef7"
 dependencies = [
  "clap",
  "pyo3",
@@ -1408,9 +1408,9 @@ dependencies = [
 
 [[package]]
 name = "portable-atomic"
-version = "1.14.0"
+version = "1.15.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3d20d5497ef88037a52ff98267d066e7f11fcc5e99bbfbd58a42336193aacec3"
+checksum = "05c8b63e8d9609db387f0324918f81d68fe27748f084ef092fb35954d0539a85"
 
 [[package]]
 name = "potential_utf"

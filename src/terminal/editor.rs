@@ -8,13 +8,18 @@ use crossterm::{
 use super::prompt::PromptDisplay;
 use super::color::hex_to_ansi;
 
+fn ps2_display() -> (String, bool) {
+    match std::env::var("PS2") {
+        Ok(v) => (v, true),
+        Err(_) => ("> ".to_string(), false),
+    }
+}
+
 #[derive(Debug, Clone, PartialEq)]
 enum EditorMode {
     Emacs,
     ViInsert,
-    #[allow(dead_code)]
     ViNormal,
-    #[allow(dead_code)]
     ViVisual,
 }
 
@@ -210,6 +215,9 @@ fn highlight_line(input: &str, colorize: bool, colors: &crate::config::schema::C
     let variable_color = crate::terminal::color::hex_to_ansi(&colors.syntax_variable);
     let operator_color = crate::terminal::color::hex_to_ansi(&colors.syntax_operator);
     let command_color = crate::terminal::color::hex_to_ansi(&colors.syntax_command);
+    let flag_color = crate::terminal::color::hex_to_ansi(&colors.syntax_flag);
+    let path_color = crate::terminal::color::hex_to_ansi(&colors.syntax_path);
+    let number_color = crate::terminal::color::hex_to_ansi(&colors.syntax_number);
     let input_fg = crate::terminal::color::hex_to_ansi(&colors.input_color);
     let reset = crate::terminal::color::reset();
     let effective_reset = if colors.input_color.is_empty() {
@@ -295,6 +303,25 @@ fn highlight_line(input: &str, colorize: bool, colors: &crate::config::schema::C
                 }
                 out.push_str(&effective_reset);
             }
+            '=' | '+' | '-' if i + 1 < len && chars[i + 1] == '=' => {
+                out.push_str(&operator_color);
+                out.push(chars[i]); i += 1;
+                out.push(chars[i]); i += 1;
+                out.push_str(&effective_reset);
+            }
+            '=' => {
+                out.push_str(&operator_color);
+                out.push(chars[i]); i += 1;
+                if i < len && chars[i] == '=' {
+                    out.push(chars[i]); i += 1;
+                }
+                out.push_str(&effective_reset);
+            }
+            '!' if i + 1 < len && chars[i + 1] == '=' => {
+                out.push_str(&operator_color);
+                out.push(chars[i]); out.push(chars[i+1]); i += 2;
+                out.push_str(&effective_reset);
+            }
             '\\' if i + 1 < len => {
                 out.push_str(&operator_color);
                 out.push(chars[i]); i += 1;
@@ -305,14 +332,29 @@ fn highlight_line(input: &str, colorize: bool, colors: &crate::config::schema::C
                 let start = i;
                 while i < len {
                     match chars[i] {
-                        '"' | '\'' | '$' | '|' | '&' | ';' | '>' | '<' | '#' => break,
+                        '"' | '\'' | '$' | '|' | '&' | ';' | '>' | '<' | '#' | '=' | '!' | '+' | '-' | '\\' => break,
                         _ => {}
                     }
                     i += 1;
                 }
-                if i > start {
+                if i == start {
+                    out.push(chars[i]); i += 1;
+                } else if i > start {
                     let word: String = chars[start..i].iter().collect();
-                    if start == 0 || (start > 0 && (chars[start-1] == '|' || chars[start-1] == '&' || chars[start-1] == ';' || chars[start-1] == '(')) {
+                    let is_cmd_pos = start == 0 || (start > 0 && (chars[start-1] == '|' || chars[start-1] == '&' || chars[start-1] == ';' || chars[start-1] == '('));
+                    if word.starts_with('-') && word.len() > 1 && word != "--" {
+                        out.push_str(&flag_color);
+                        out.push_str(&word);
+                        out.push_str(&effective_reset);
+                    } else if !is_cmd_pos && word.chars().next().is_some_and(|c| c.is_ascii_digit()) && word.chars().all(|c| c.is_ascii_hexdigit() || c == '.' || c == 'x' || c == 'X' || c == 'o' || c == 'O' || c == 'b' || c == 'B') {
+                        out.push_str(&number_color);
+                        out.push_str(&word);
+                        out.push_str(&effective_reset);
+                    } else if !is_cmd_pos && word.chars().any(|c| c == '/') && (word.starts_with('/') || word.starts_with("./") || word.starts_with("../") || word.starts_with("~/") || word.contains('/')) {
+                        out.push_str(&path_color);
+                        out.push_str(&word);
+                        out.push_str(&effective_reset);
+                    } else if is_cmd_pos {
                         out.push_str(&command_color);
                         out.push_str(&word);
                         out.push_str(&effective_reset);
@@ -789,9 +831,14 @@ pub fn read_line_editor(
                                         input.push('\n');
                                     }
                                     cursor_pos = input.chars().count();
+                                    let (ps2, from_env) = ps2_display();
+                                    if from_env {
+                                        eprint!("{}", ps2);
+                                        let _ = io::stderr().flush();
+                                    }
                                     rctx.prompt = Cow::Owned(PromptDisplay {
                                         lines_above: vec![],
-                                        input_prefix: "> ".to_string(),
+                                        input_prefix: if from_env { String::new() } else { ps2 },
                                         lines_below: vec![],
                                         right_prompt: String::new(),
                                         right_prompt_color: String::new(),
@@ -930,9 +977,14 @@ pub fn read_line_editor(
                                         input.push('\n');
                                     }
                                     cursor_pos = input.chars().count();
+                                    let (ps2, from_env) = ps2_display();
+                                    if from_env {
+                                        eprint!("{}", ps2);
+                                        let _ = io::stderr().flush();
+                                    }
                                     rctx.prompt = Cow::Owned(PromptDisplay {
                                         lines_above: vec![],
-                                        input_prefix: "> ".to_string(),
+                                        input_prefix: if from_env { String::new() } else { ps2 },
                                         lines_below: vec![],
                                         right_prompt: String::new(),
                                         right_prompt_color: String::new(),
@@ -1129,9 +1181,14 @@ pub fn read_line_editor(
                                                         input.push('\n');
                                                     }
                                                      cursor_pos = input.chars().count();
+                                                    let (ps2, from_env) = ps2_display();
+                                                    if from_env {
+                                                        eprint!("{}", ps2);
+                                                        let _ = io::stderr().flush();
+                                                    }
                                                     rctx.prompt = Cow::Owned(PromptDisplay {
                                                         lines_above: vec![],
-                                                        input_prefix: "> ".to_string(),
+                                                        input_prefix: if from_env { String::new() } else { ps2 },
                                                         lines_below: vec![],
                                                         right_prompt: String::new(),
                                                         right_prompt_color: String::new(),
@@ -1170,6 +1227,13 @@ pub fn read_line_editor(
                                 insert_char_at(&mut input, cursor_pos, '\t');
                                 cursor_pos += 1;
                                 history_offset = None;
+                                redraw(&rctx, &input, cursor_pos, &suggestion)?;
+                            }
+                            KeyCode::Esc if mode == EditorMode::ViInsert => {
+                                mode = EditorMode::ViNormal;
+                                if cursor_pos > 0 && cursor_pos >= input.chars().count() {
+                                    cursor_pos = cursor_pos.saturating_sub(1);
+                                }
                                 redraw(&rctx, &input, cursor_pos, &suggestion)?;
                             }
                             KeyCode::Up => {
