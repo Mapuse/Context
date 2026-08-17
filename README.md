@@ -213,7 +213,7 @@ cargo build --release
 
 ## Installation
 
-All build systems auto-detect `x86_64`/`aarch64` and select the correct musl target. Cross-compilation files are in `env.mk`, `toolchain.cmake`, and `cross.txt` (generated via `gen-cross.sh`).
+All build systems auto-detect `x86_64`/`aarch64` and select the correct musl target. Cross-compilation files are in `env.mk`, `toolchain.cmake`, and `cross.txt` (generated via `scripts/crossgen.sh`).
 
 ### Cargo (direct)
 
@@ -235,7 +235,7 @@ make install DESTDIR=/mnt     # staged install
 ### Meson
 
 ```shell
-./gen-cross.sh                              # generate cross file for host arch
+./scripts/crossgen.sh                              # generate cross file for host arch
 meson setup builddir --cross-file cross.txt
 meson compile -C builddir
 meson install -C builddir                   # ctx -> /bin/ctx

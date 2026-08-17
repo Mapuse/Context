@@ -7,7 +7,7 @@ project('context', 'rust',
   ],
 )
 
-gen_cross = find_program('gen-cross.sh')
+gen_cross = find_program('scripts/crossgen.sh')
 run_command(gen_cross, check : true)
 
 cpu = host_machine.cpu_family()
