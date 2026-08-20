@@ -7,12 +7,20 @@ use crossterm::{
 
 use super::prompt::PromptDisplay;
 use super::color::hex_to_ansi;
+use crate::shell::builtin::HISTORY_CB;
 
 fn ps2_display() -> (String, bool) {
     match std::env::var("PS2") {
         Ok(v) => (v, true),
         Err(_) => ("> ".to_string(), false),
     }
+}
+
+#[derive(Clone)]
+enum ViChange {
+    Insert(String),
+    Delete(usize, usize),
+    Change(usize, usize, String),
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -35,6 +43,39 @@ fn remove_char_at(s: &mut String, char_idx: usize) {
 fn insert_char_at(s: &mut String, char_idx: usize, c: char) {
     let byte = char_to_byte(s, char_idx);
     s.insert(byte, c);
+}
+
+fn find_word_start(input: &str, cursor: usize) -> usize {
+    let chars: Vec<char> = input.chars().collect();
+    if cursor == 0 {
+        return 0;
+    }
+    let mut i = cursor;
+    while i > 0 {
+        let ch = chars[i - 1];
+        if ch == ' ' || ch == '\t' || ch == '\n' || ch == '|' || ch == '&' || ch == ';' || ch == '(' || ch == '{' {
+            return i;
+        }
+        i -= 1;
+    }
+    0
+}
+
+fn tab_common_prefix(completions: &[String]) -> String {
+    if completions.is_empty() {
+        return String::new();
+    }
+    let first: Vec<char> = completions[0].chars().collect();
+    let mut len = first.len();
+    for comp in &completions[1..] {
+        let other: Vec<char> = comp.chars().collect();
+        let mut i = 0;
+        while i < len && i < other.len() && first[i] == other[i] {
+            i += 1;
+        }
+        len = i;
+    }
+    first[..len].iter().collect()
 }
 
 static KILL_RING: LazyLock<Mutex<Vec<String>>> = LazyLock::new(|| Mutex::new(Vec::new()));
@@ -236,7 +277,7 @@ fn highlight_line(input: &str, colorize: bool, colors: &crate::config::schema::C
 
     while i < len {
         match chars[i] {
-            '#' if i == 0 || (i > 0 && chars[i-1] == ' ') => {
+            '#' if i == 0 || (i > 0 && matches!(chars[i-1], ' ' | '|' | '&' | ';' | '(' | '\n')) => {
                 out.push_str(&comment_color);
                 while i < len { out.push(chars[i]); i += 1; }
                 out.push_str(&effective_reset);
@@ -255,6 +296,13 @@ fn highlight_line(input: &str, colorize: bool, colors: &crate::config::schema::C
                 out.push_str(&string_color);
                 out.push(chars[i]); i += 1;
                 while i < len && chars[i] != '\'' { out.push(chars[i]); i += 1; }
+                if i < len { out.push(chars[i]); i += 1; }
+                out.push_str(&effective_reset);
+            }
+            '`' => {
+                out.push_str(&string_color);
+                out.push(chars[i]); i += 1;
+                while i < len && chars[i] != '`' { out.push(chars[i]); i += 1; }
                 if i < len { out.push(chars[i]); i += 1; }
                 out.push_str(&effective_reset);
             }
@@ -288,6 +336,11 @@ fn highlight_line(input: &str, colorize: bool, colors: &crate::config::schema::C
                         }
                     }
                 }
+                out.push_str(&effective_reset);
+            }
+            '|' if i + 1 < len && chars[i + 1] == '&' => {
+                out.push_str(&operator_color);
+                out.push(chars[i]); out.push(chars[i+1]); i += 2;
                 out.push_str(&effective_reset);
             }
             '|' | '&' if i + 1 < len && chars[i + 1] == chars[i] => {
@@ -328,11 +381,14 @@ fn highlight_line(input: &str, colorize: bool, colors: &crate::config::schema::C
                 out.push(chars[i]); i += 1;
                 out.push_str(&effective_reset);
             }
+            ' ' | '\t' => {
+                out.push(chars[i]); i += 1;
+            }
             _ => {
                 let start = i;
                 while i < len {
                     match chars[i] {
-                        '"' | '\'' | '$' | '|' | '&' | ';' | '>' | '<' | '#' | '=' | '!' | '+' | '-' | '\\' => break,
+                        ' ' | '\t' | '"' | '\'' | '$' | '|' | '&' | ';' | '>' | '<' | '#' | '=' | '!' | '+' | '-' | '\\' | '(' | ')' | '{' | '}' | '`' => break,
                         _ => {}
                     }
                     i += 1;
@@ -341,7 +397,9 @@ fn highlight_line(input: &str, colorize: bool, colors: &crate::config::schema::C
                     out.push(chars[i]); i += 1;
                 } else if i > start {
                     let word: String = chars[start..i].iter().collect();
-                    let is_cmd_pos = start == 0 || (start > 0 && (chars[start-1] == '|' || chars[start-1] == '&' || chars[start-1] == ';' || chars[start-1] == '('));
+                    let mut prev = start;
+                    while prev > 0 && chars[prev - 1] == ' ' { prev -= 1; }
+                    let is_cmd_pos = prev == 0 || (prev > 0 && (chars[prev-1] == '|' || chars[prev-1] == '&' || chars[prev-1] == ';' || chars[prev-1] == '(' || chars[prev-1] == '\n' || chars[prev-1] == '!'));
                     if word.starts_with('-') && word.len() > 1 && word != "--" {
                         out.push_str(&flag_color);
                         out.push_str(&word);
@@ -350,7 +408,7 @@ fn highlight_line(input: &str, colorize: bool, colors: &crate::config::schema::C
                         out.push_str(&number_color);
                         out.push_str(&word);
                         out.push_str(&effective_reset);
-                    } else if !is_cmd_pos && word.chars().any(|c| c == '/') && (word.starts_with('/') || word.starts_with("./") || word.starts_with("../") || word.starts_with("~/") || word.contains('/')) {
+                    } else if word.starts_with('~') || word.chars().any(|c| c == '/') {
                         out.push_str(&path_color);
                         out.push_str(&word);
                         out.push_str(&effective_reset);
@@ -366,7 +424,18 @@ fn highlight_line(input: &str, colorize: bool, colors: &crate::config::schema::C
         }
     }
     out.push_str(reset);
-    out
+    let mut filtered = String::with_capacity(out.len());
+    let out_chars: Vec<char> = out.chars().collect();
+    let mut j = 0;
+    while j < out_chars.len() {
+        if out_chars[j] == '\\' && j + 1 < out_chars.len() && (out_chars[j + 1] == '[' || out_chars[j + 1] == ']') {
+            j += 2;
+        } else {
+            filtered.push(out_chars[j]);
+            j += 1;
+        }
+    }
+    filtered
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -408,9 +477,13 @@ fn exec_widget(widget: &str, input: &mut String, cursor_pos: &mut usize, history
         "beginning-of-line" => { *cursor_pos = 0; }
         "end-of-line" => { *cursor_pos = input.chars().count(); }
         "kill-line" => {
+            let killed: String = input.chars().skip(*cursor_pos).collect();
+            kill_ring_push(&killed);
             input.truncate(char_to_byte(input, *cursor_pos));
         }
         "backward-kill-line" => {
+            let killed: String = input.chars().take(*cursor_pos).collect();
+            kill_ring_push(&killed);
             let tail: String = input.chars().skip(*cursor_pos).collect();
             input.clear();
             input.push_str(&tail);
@@ -507,6 +580,85 @@ fn exec_widget(widget: &str, input: &mut String, cursor_pos: &mut usize, history
         "clear-screen" => {
             print!("\x1b[2J\x1b[H");
         }
+        "transpose-words" => {
+            let chars: Vec<char> = input.chars().collect();
+            let len = chars.len();
+            if len < 2 { return; }
+            let mut w1_start = *cursor_pos;
+            while w1_start < len && is_delim(chars[w1_start]) { w1_start += 1; }
+            let mut w1_end = w1_start;
+            while w1_end < len && !is_delim(chars[w1_end]) { w1_end += 1; }
+            let mut w2_end = *cursor_pos;
+            while w2_end > 0 && is_delim(chars[w2_end - 1]) { w2_end -= 1; }
+            let mut w2_start = w2_end;
+            while w2_start > 0 && !is_delim(chars[w2_start - 1]) { w2_start -= 1; }
+            if w2_start < w2_end && w1_start < w1_end && w2_end <= w1_start {
+                let word_before: String = chars[w2_start..w2_end].iter().collect();
+                let word_after: String = chars[w1_start..w1_end].iter().collect();
+                let before: String = chars[..w2_start].iter().collect();
+                let between: String = chars[w2_end..w1_start].iter().collect();
+                let after: String = chars[w1_end..].iter().collect();
+                *input = format!("{}{}{}{}{}", before, word_after, between, word_before, after);
+                *cursor_pos = w2_start + word_after.chars().count();
+            }
+        }
+        "capitalize-word" => {
+            let chars: Vec<char> = input.chars().collect();
+            let len = chars.len();
+            let mut start = *cursor_pos;
+            while start < len && is_delim(chars[start]) { start += 1; }
+            let mut end = start;
+            while end < len && !is_delim(chars[end]) { end += 1; }
+            if start < end {
+                let word: String = chars[start..end].iter().collect();
+                let mut result = String::with_capacity(word.len());
+                let mut first = true;
+                for ch in word.chars() {
+                    if first {
+                        result.extend(ch.to_uppercase());
+                        first = false;
+                    } else {
+                        result.extend(ch.to_lowercase());
+                    }
+                }
+                let byte_start = char_to_byte(input, start);
+                let byte_end = char_to_byte(input, end);
+                input.replace_range(byte_start..byte_end, &result);
+                *cursor_pos = end;
+            }
+        }
+        "upcase-word" => {
+            let chars: Vec<char> = input.chars().collect();
+            let len = chars.len();
+            let mut start = *cursor_pos;
+            while start < len && is_delim(chars[start]) { start += 1; }
+            let mut end = start;
+            while end < len && !is_delim(chars[end]) { end += 1; }
+            if start < end {
+                let word: String = chars[start..end].iter().collect();
+                let upper: String = word.chars().flat_map(|c| c.to_uppercase()).collect();
+                let byte_start = char_to_byte(input, start);
+                let byte_end = char_to_byte(input, end);
+                input.replace_range(byte_start..byte_end, &upper);
+                *cursor_pos = end;
+            }
+        }
+        "downcase-word" => {
+            let chars: Vec<char> = input.chars().collect();
+            let len = chars.len();
+            let mut start = *cursor_pos;
+            while start < len && is_delim(chars[start]) { start += 1; }
+            let mut end = start;
+            while end < len && !is_delim(chars[end]) { end += 1; }
+            if start < end {
+                let word: String = chars[start..end].iter().collect();
+                let lower: String = word.chars().flat_map(|c| c.to_lowercase()).collect();
+                let byte_start = char_to_byte(input, start);
+                let byte_end = char_to_byte(input, end);
+                input.replace_range(byte_start..byte_end, &lower);
+                *cursor_pos = end;
+            }
+        }
         _ => {}
     }
 }
@@ -596,8 +748,11 @@ pub fn read_line_editor(
         EditorMode::Emacs
     };
     let mut mode = mode;
-    let _vi_register: char = '"';
     let mut last_vi_action: Option<String> = None;
+    let mut vi_last_change: Option<ViChange> = None;
+    let mut vi_search_pattern: Option<String> = None;
+    let mut vi_search_forward: bool = true;
+    let mut vi_visual_start: usize = 0;
     let mut overwrite_mode = false;
     let mut prev_mode_for_cursor = EditorMode::Emacs;
 
@@ -671,6 +826,59 @@ pub fn read_line_editor(
                 match mode {
                     EditorMode::ViNormal | EditorMode::ViVisual => {
                         let mut switched_to_insert = false;
+                        if mode == EditorMode::ViVisual {
+                            match code {
+                                KeyCode::Char('d') if !modifiers.contains(KeyModifiers::CONTROL) => {
+                                    let start = vi_visual_start.min(cursor_pos);
+                                    let end = vi_visual_start.max(cursor_pos);
+                                    let deleted: String = input.chars().skip(start).take(end - start).collect();
+                                    push_undo(&input, cursor_pos);
+                                    vi_last_change = Some(ViChange::Delete(start, end));
+                                    kill_ring_push(&deleted);
+                                    let byte_start = char_to_byte(&input, start);
+                                    let byte_end = char_to_byte(&input, end);
+                                    input.drain(byte_start..byte_end);
+                                    cursor_pos = start.min(input.chars().count());
+                                    mode = EditorMode::ViNormal;
+                                    redraw(&rctx, &input, cursor_pos, &suggestion)?;
+                                    continue;
+                                }
+                                KeyCode::Char('y') if !modifiers.contains(KeyModifiers::CONTROL) => {
+                                    let start = vi_visual_start.min(cursor_pos);
+                                    let end = vi_visual_start.max(cursor_pos);
+                                    let yanked: String = input.chars().skip(start).take(end - start).collect();
+                                    kill_ring_push(&yanked);
+                                    mode = EditorMode::ViNormal;
+                                    redraw(&rctx, &input, cursor_pos, &suggestion)?;
+                                    continue;
+                                }
+                                KeyCode::Char('u') if !modifiers.contains(KeyModifiers::CONTROL) => {
+                                    let start = vi_visual_start.min(cursor_pos);
+                                    let end = vi_visual_start.max(cursor_pos);
+                                    let byte_start = char_to_byte(&input, start);
+                                    let byte_end = char_to_byte(&input, end);
+                                    let selected: String = input[byte_start..byte_end].to_lowercase();
+                                    push_undo(&input, cursor_pos);
+                                    input.replace_range(byte_start..byte_end, &selected);
+                                    mode = EditorMode::ViNormal;
+                                    redraw(&rctx, &input, cursor_pos, &suggestion)?;
+                                    continue;
+                                }
+                                KeyCode::Char('U') if !modifiers.contains(KeyModifiers::CONTROL) => {
+                                    let start = vi_visual_start.min(cursor_pos);
+                                    let end = vi_visual_start.max(cursor_pos);
+                                    let byte_start = char_to_byte(&input, start);
+                                    let byte_end = char_to_byte(&input, end);
+                                    let selected: String = input[byte_start..byte_end].to_uppercase();
+                                    push_undo(&input, cursor_pos);
+                                    input.replace_range(byte_start..byte_end, &selected);
+                                    mode = EditorMode::ViNormal;
+                                    redraw(&rctx, &input, cursor_pos, &suggestion)?;
+                                    continue;
+                                }
+                                _ => {}
+                            }
+                        }
                         match code {
                             KeyCode::Char('i') if !modifiers.contains(KeyModifiers::CONTROL) => {
                                 mode = EditorMode::ViInsert;
@@ -737,6 +945,14 @@ pub fn read_line_editor(
                                 cursor_pos = pos;
                                 redraw(&rctx, &input, cursor_pos, &suggestion)?;
                             }
+                            KeyCode::Char('W') if !modifiers.contains(KeyModifiers::CONTROL) => {
+                                let chars: Vec<char> = input.chars().collect();
+                                let mut pos = cursor_pos;
+                                while pos < chars.len() && chars[pos].is_whitespace() { pos += 1; }
+                                while pos < chars.len() && !chars[pos].is_whitespace() { pos += 1; }
+                                cursor_pos = pos;
+                                redraw(&rctx, &input, cursor_pos, &suggestion)?;
+                            }
                             KeyCode::Char('b') if !modifiers.contains(KeyModifiers::CONTROL) => {
                                 let chars: Vec<char> = input.chars().collect();
                                 let delims: Vec<char> = editor_cfg.word_delimiters.chars().collect();
@@ -744,6 +960,19 @@ pub fn read_line_editor(
                                 while pos > 0 && delims.contains(&chars[pos - 1]) { pos -= 1; }
                                 while pos > 0 && !delims.contains(&chars[pos - 1]) { pos -= 1; }
                                 cursor_pos = pos;
+                                redraw(&rctx, &input, cursor_pos, &suggestion)?;
+                            }
+                            KeyCode::Char('e') if !modifiers.contains(KeyModifiers::CONTROL) => {
+                                let chars: Vec<char> = input.chars().collect();
+                                let delims: Vec<char> = editor_cfg.word_delimiters.chars().collect();
+                                let mut pos = cursor_pos;
+                                if pos < chars.len() {
+                                    while pos < chars.len() && delims.contains(&chars[pos]) { pos += 1; }
+                                    if pos < chars.len() {
+                                        while pos + 1 < chars.len() && !delims.contains(&chars[pos + 1]) { pos += 1; }
+                                        cursor_pos = pos;
+                                    }
+                                }
                                 redraw(&rctx, &input, cursor_pos, &suggestion)?;
                             }
                             KeyCode::Char('x') if !modifiers.contains(KeyModifiers::CONTROL) => {
@@ -755,22 +984,45 @@ pub fn read_line_editor(
                                     redraw(&rctx, &input, cursor_pos, &suggestion)?;
                                 }
                             }
-                            KeyCode::Char('d') if !modifiers.contains(KeyModifiers::CONTROL) => {
+                            KeyCode::Char('~') if !modifiers.contains(KeyModifiers::CONTROL) => {
+                                let chars: Vec<char> = input.chars().collect();
+                                if cursor_pos < chars.len() {
+                                    let old = chars[cursor_pos];
+                                    let new = if old.is_uppercase() {
+                                        old.to_lowercase().next().unwrap_or(old)
+                                    } else if old.is_lowercase() {
+                                        old.to_uppercase().next().unwrap_or(old)
+                                    } else {
+                                        old
+                                    };
+                                    if old != new {
+                                        push_undo(&input, cursor_pos);
+                                        remove_char_at(&mut input, cursor_pos);
+                                        insert_char_at(&mut input, cursor_pos, new);
+                                    }
+                                    cursor_pos += 1;
+                                    redraw(&rctx, &input, cursor_pos, &suggestion)?;
+                                }
+                            }
+                            KeyCode::Char('d') if !modifiers.contains(KeyModifiers::CONTROL) && last_vi_action.as_deref() != Some("d") => {
                                 last_vi_action = Some("d".to_string());
                             }
                             KeyCode::Char('d') if last_vi_action.as_deref() == Some("d") => {
-                                let line_end = input[cursor_pos..].find('\n').map(|p| cursor_pos + p).unwrap_or(input.chars().count());
-                                let killed: String = input.chars().skip(cursor_pos).take(line_end - cursor_pos).collect();
+                                let byte_cursor = char_to_byte(&input, cursor_pos);
+                                let line_end_char = input.char_indices().skip(byte_cursor)
+                                    .find(|&(_, c)| c == '\n')
+                                    .map(|(byte, _)| input[..byte].chars().count())
+                                    .unwrap_or(input.chars().count());
+                                let killed: String = input.chars().skip(cursor_pos).take(line_end_char - cursor_pos).collect();
                                 push_undo(&input, cursor_pos);
                                 kill_ring_push(&killed);
-                                let bytes_to_remove = char_to_byte(&input, line_end) - char_to_byte(&input, cursor_pos);
-                                let byte_start = char_to_byte(&input, cursor_pos);
-                                input.drain(byte_start..byte_start + bytes_to_remove);
+                                let byte_end = char_to_byte(&input, line_end_char);
+                                input.drain(byte_cursor..byte_end);
                                 last_vi_action = None;
                                 redraw(&rctx, &input, cursor_pos, &suggestion)?;
                             }
                             KeyCode::Char('D') if !modifiers.contains(KeyModifiers::CONTROL) => {
-                                let killed: String = input[cursor_pos..].to_string();
+                                let killed: String = input[char_to_byte(&input, cursor_pos)..].to_string();
                                 push_undo(&input, cursor_pos);
                                 kill_ring_push(&killed);
                                 input.truncate(char_to_byte(&input, cursor_pos));
@@ -779,6 +1031,7 @@ pub fn read_line_editor(
                             KeyCode::Char('p') if !modifiers.contains(KeyModifiers::CONTROL) => {
                                 if let Some(yanked) = kill_ring_yank() {
                                     push_undo(&input, cursor_pos);
+                                    vi_last_change = Some(ViChange::Insert(yanked.clone()));
                                     let before: String = input.chars().take(cursor_pos).collect();
                                     let after: String = input.chars().skip(cursor_pos).collect();
                                     input = format!("{}{}{}", before, yanked, after);
@@ -801,6 +1054,8 @@ pub fn read_line_editor(
                                 }
                             }
                             KeyCode::Char('c') if !modifiers.contains(KeyModifiers::CONTROL) => {
+                                let old_text = input.clone();
+                                vi_last_change = Some(ViChange::Change(0, input.chars().count(), old_text));
                                 mode = EditorMode::ViInsert;
                                 switched_to_insert = true;
                                 input.clear();
@@ -808,8 +1063,155 @@ pub fn read_line_editor(
                                 redraw(&rctx, &input, cursor_pos, &suggestion)?;
                             }
                             KeyCode::Char('v') if !modifiers.contains(KeyModifiers::CONTROL) => {
-                                mode = EditorMode::ViVisual;
+                                if mode == EditorMode::ViVisual {
+                                    mode = EditorMode::ViNormal;
+                                } else {
+                                    vi_visual_start = cursor_pos;
+                                    mode = EditorMode::ViVisual;
+                                }
                                 redraw(&rctx, &input, cursor_pos, &suggestion)?;
+                            }
+                            KeyCode::Char('/') if mode == EditorMode::ViNormal && !modifiers.contains(KeyModifiers::CONTROL) => {
+                                let original = input.clone();
+                                let mut search = String::new();
+                                loop {
+                                    {
+                                        let ctx = EditorRenderCtx {
+                                            prompt: Cow::Owned(PromptDisplay {
+                                                lines_above: vec![],
+                                                input_prefix: "/".to_string(),
+                                                lines_below: vec![],
+                                                right_prompt: String::new(),
+                                                right_prompt_color: String::new(),
+                                                right_prompt_hide_threshold: 0.0,
+                                            }),
+                                            autosuggest_cfg,
+                                            colorize: editor_cfg.colorize_output,
+                                            colors: colors_cfg,
+                                        };
+                                        redraw(&ctx, &search, search.len(), "")?;
+                                    }
+                                    if let Ok(Event::Key(ev)) = event::read() {
+                                        match ev.code {
+                                            KeyCode::Char(c) => { search.push(c); }
+                                            KeyCode::Esc => { search.clear(); break; }
+                                            KeyCode::Enter => break,
+                                            KeyCode::Backspace => { search.pop(); }
+                                            _ => {}
+                                        }
+                                    }
+                                }
+                                if !search.is_empty() {
+                                    let hist = HISTORY_CB.get().map(|cb| cb()).unwrap_or_default();
+                                    let found = if vi_search_forward {
+                                        hist.iter().rev().find(|l| l.contains(&search)).cloned()
+                                    } else {
+                                        hist.iter().find(|l| l.contains(&search)).cloned()
+                                    };
+                                    if let Some(matched) = found {
+                                        input = matched;
+                                        cursor_pos = input.chars().count();
+                                        vi_search_pattern = Some(search);
+                                    } else {
+                                        input = original;
+                                        cursor_pos = input.chars().count();
+                                    }
+                                } else {
+                                    input = original;
+                                    cursor_pos = input.chars().count();
+                                }
+                                redraw(&rctx, &input, cursor_pos, &suggestion)?;
+                            }
+                            KeyCode::Char('?') if mode == EditorMode::ViNormal && !modifiers.contains(KeyModifiers::CONTROL) => {
+                                let original = input.clone();
+                                let mut search = String::new();
+                                loop {
+                                    {
+                                        let ctx = EditorRenderCtx {
+                                            prompt: Cow::Owned(PromptDisplay {
+                                                lines_above: vec![],
+                                                input_prefix: "?".to_string(),
+                                                lines_below: vec![],
+                                                right_prompt: String::new(),
+                                                right_prompt_color: String::new(),
+                                                right_prompt_hide_threshold: 0.0,
+                                            }),
+                                            autosuggest_cfg,
+                                            colorize: editor_cfg.colorize_output,
+                                            colors: colors_cfg,
+                                        };
+                                        redraw(&ctx, &search, search.len(), "")?;
+                                    }
+                                    if let Ok(Event::Key(ev)) = event::read() {
+                                        match ev.code {
+                                            KeyCode::Char(c) => { search.push(c); }
+                                            KeyCode::Esc => { search.clear(); break; }
+                                            KeyCode::Enter => break,
+                                            KeyCode::Backspace => { search.pop(); }
+                                            _ => {}
+                                        }
+                                    }
+                                }
+                                if !search.is_empty() {
+                                    let hist = HISTORY_CB.get().map(|cb| cb()).unwrap_or_default();
+                                    let found = hist.iter().find(|l| l.contains(&search)).cloned();
+                                    if let Some(matched) = found {
+                                        input = matched;
+                                        cursor_pos = input.chars().count();
+                                        vi_search_pattern = Some(search);
+                                        vi_search_forward = false;
+                                    } else {
+                                        input = original;
+                                        cursor_pos = input.chars().count();
+                                    }
+                                } else {
+                                    input = original;
+                                    cursor_pos = input.chars().count();
+                                }
+                                redraw(&rctx, &input, cursor_pos, &suggestion)?;
+                            }
+                            KeyCode::Char('n') if mode == EditorMode::ViNormal && !modifiers.contains(KeyModifiers::CONTROL) => {
+                                if let Some(ref pat) = vi_search_pattern.clone() {
+                                    let hist = HISTORY_CB.get().map(|cb| cb()).unwrap_or_default();
+                                    let found = if vi_search_forward {
+                                        hist.iter().rev().find(|l| l.contains(pat.as_str())).cloned()
+                                    } else {
+                                        hist.iter().find(|l| l.contains(pat.as_str())).cloned()
+                                    };
+                                    if let Some(matched) = found {
+                                        input = matched;
+                                        cursor_pos = input.chars().count();
+                                    }
+                                    redraw(&rctx, &input, cursor_pos, &suggestion)?;
+                                }
+                            }
+                            KeyCode::Char('N') if mode == EditorMode::ViNormal && !modifiers.contains(KeyModifiers::CONTROL) => {
+                                if let Some(ref pat) = vi_search_pattern.clone() {
+                                    let hist = HISTORY_CB.get().map(|cb| cb()).unwrap_or_default();
+                                    let found = if !vi_search_forward {
+                                        hist.iter().rev().find(|l| l.contains(pat.as_str())).cloned()
+                                    } else {
+                                        hist.iter().find(|l| l.contains(pat.as_str())).cloned()
+                                    };
+                                    if let Some(matched) = found {
+                                        input = matched;
+                                        cursor_pos = input.chars().count();
+                                    }
+                                    redraw(&rctx, &input, cursor_pos, &suggestion)?;
+                                }
+                            }
+                            KeyCode::Char('J') if mode == EditorMode::ViNormal && !modifiers.contains(KeyModifiers::CONTROL) => {
+                                if let Some(nl_pos) = input[char_to_byte(&input, cursor_pos)..].find('\n') {
+                                    let byte_pos = char_to_byte(&input, cursor_pos);
+                                    let end = byte_pos + nl_pos;
+                                    let next_nl = input[end + 1..].find('\n').map(|p| end + 1 + p).unwrap_or(input.len());
+                                    let removed: String = input[end..next_nl].chars().collect();
+                                    let stripped = removed.trim_start();
+                                    let replace = if stripped.starts_with('\\') { "" } else { " " };
+                                    push_undo(&input, cursor_pos);
+                                    input.replace_range(char_to_byte(&input, cursor_pos)..next_nl, replace);
+                                    redraw(&rctx, &input, cursor_pos, &suggestion)?;
+                                }
                             }
                             KeyCode::Enter if !modifiers.contains(KeyModifiers::CONTROL) => {
                                 if is_input_incomplete(&input) {
@@ -862,19 +1264,145 @@ pub fn read_line_editor(
                             }
                             KeyCode::Char(c) if !modifiers.contains(KeyModifiers::CONTROL) && c.is_ascii_digit() && last_vi_action.as_deref() == Some("d") => {
                                 if c == 'd' {
-                                    let line_start = input[..char_to_byte(&input, cursor_pos)].rfind('\n').map(|p| p + 1).unwrap_or(0);
-                                    let line_end = input[cursor_pos..].find('\n').map(|p| cursor_pos + p).unwrap_or(input.chars().count());
-                                    let killed: String = input[line_start..char_to_byte(&input, line_end)].to_string();
+                                    let byte_cursor = char_to_byte(&input, cursor_pos);
+                                    let line_start = input[..byte_cursor].rfind('\n').map(|p| p + 1).unwrap_or(0);
+                                    let byte_end = input[byte_cursor..].find('\n')
+                                        .map(|p| byte_cursor + p)
+                                        .unwrap_or(input.len());
+                                    let killed: String = input[line_start..byte_end].to_string();
                                     push_undo(&input, cursor_pos);
                                     kill_ring_push(&killed);
-                                    let byte_start = char_to_byte(&input, line_start);
-                                    let byte_end = char_to_byte(&input, line_end);
-                                    input.drain(byte_start..byte_end);
-                                    cursor_pos = line_start;
+                                    let new_cursor_char = input[..line_start].chars().count();
+                                    input.drain(line_start..byte_end);
+                                    cursor_pos = new_cursor_char;
                                     last_vi_action = None;
                                     redraw(&rctx, &input, cursor_pos, &suggestion)?;
                                 } else {
                                     last_vi_action = None;
+                                }
+                            }
+                            KeyCode::Char('G') if !modifiers.contains(KeyModifiers::CONTROL) => {
+                                cursor_pos = input.chars().count();
+                                redraw(&rctx, &input, cursor_pos, &suggestion)?;
+                            }
+                            KeyCode::Char('g') if !modifiers.contains(KeyModifiers::CONTROL) && last_vi_action.as_deref() == Some("g") => {
+                                cursor_pos = 0;
+                                last_vi_action = None;
+                                redraw(&rctx, &input, cursor_pos, &suggestion)?;
+                            }
+                            KeyCode::Char('g') if !modifiers.contains(KeyModifiers::CONTROL) => {
+                                last_vi_action = Some("g".to_string());
+                            }
+                            KeyCode::Char('f') if !modifiers.contains(KeyModifiers::CONTROL) => {
+                                if let Ok(next_ev) = event::read()
+                                    && let Event::Key(KeyEvent { code: KeyCode::Char(c), .. }) = next_ev {
+                                        let chars: Vec<char> = input.chars().collect();
+                                        if let Some(rel) = chars[cursor_pos+1..].iter().position(|&ch| ch == c) {
+                                            cursor_pos += 1 + rel;
+                                        }
+                                    }
+                                redraw(&rctx, &input, cursor_pos, &suggestion)?;
+                            }
+                            KeyCode::Char('F') if !modifiers.contains(KeyModifiers::CONTROL) => {
+                                if let Ok(next_ev) = event::read()
+                                    && let Event::Key(KeyEvent { code: KeyCode::Char(c), .. }) = next_ev {
+                                        let chars: Vec<char> = input.chars().collect();
+                                        if cursor_pos > 0
+                                            && let Some(rel) = chars[..cursor_pos].iter().rev().position(|&ch| ch == c) {
+                                                cursor_pos -= 1 + rel;
+                                            }
+                                    }
+                                redraw(&rctx, &input, cursor_pos, &suggestion)?;
+                            }
+                            KeyCode::Char('t') if !modifiers.contains(KeyModifiers::CONTROL) => {
+                                if let Ok(next_ev) = event::read()
+                                    && let Event::Key(KeyEvent { code: KeyCode::Char(c), .. }) = next_ev {
+                                        let chars: Vec<char> = input.chars().collect();
+                                        if let Some(rel) = chars[cursor_pos+1..].iter().position(|&ch| ch == c) {
+                                            cursor_pos += rel;
+                                        }
+                                    }
+                                redraw(&rctx, &input, cursor_pos, &suggestion)?;
+                            }
+                            KeyCode::Char('T') if !modifiers.contains(KeyModifiers::CONTROL) => {
+                                if let Ok(next_ev) = event::read()
+                                    && let Event::Key(KeyEvent { code: KeyCode::Char(c), .. }) = next_ev {
+                                        let chars: Vec<char> = input.chars().collect();
+                                        if cursor_pos > 0
+                                            && let Some(rel) = chars[..cursor_pos].iter().rev().position(|&ch| ch == c) {
+                                                cursor_pos = cursor_pos.saturating_sub(rel);
+                                            }
+                                    }
+                                redraw(&rctx, &input, cursor_pos, &suggestion)?;
+                            }
+                            KeyCode::Char('C') if !modifiers.contains(KeyModifiers::CONTROL) => {
+                                push_undo(&input, cursor_pos);
+                                vi_last_change = Some(ViChange::Delete(cursor_pos, input.chars().count()));
+                                let killed: String = input.chars().skip(cursor_pos).collect();
+                                kill_ring_push(&killed);
+                                input.truncate(char_to_byte(&input, cursor_pos));
+                                mode = EditorMode::ViInsert;
+                                switched_to_insert = true;
+                                redraw(&rctx, &input, cursor_pos, &suggestion)?;
+                            }
+                            KeyCode::Char('Y') if !modifiers.contains(KeyModifiers::CONTROL) => {
+                                let line_start_byte = input[..char_to_byte(&input, cursor_pos)].rfind('\n').map(|p| p + 1).unwrap_or(0);
+                                let line_end_byte = input[char_to_byte(&input, cursor_pos)..].find('\n')
+                                    .map(|p| char_to_byte(&input, cursor_pos) + p)
+                                    .unwrap_or(input.len());
+                                let killed: String = input[line_start_byte..line_end_byte].to_string();
+                                kill_ring_push(&killed);
+                                redraw(&rctx, &input, cursor_pos, &suggestion)?;
+                            }
+                            KeyCode::Char('P') if !modifiers.contains(KeyModifiers::CONTROL) => {
+                                if let Some(yanked) = kill_ring_yank() {
+                                    push_undo(&input, cursor_pos);
+                                    let before: String = input.chars().take(cursor_pos).collect();
+                                    let after: String = input.chars().skip(cursor_pos).collect();
+                                    input = format!("{}{}{}", before, yanked, after);
+                                    redraw(&rctx, &input, cursor_pos, &suggestion)?;
+                                }
+                            }
+                            KeyCode::Char('.') if !modifiers.contains(KeyModifiers::CONTROL) => {
+                                if let Some(ref change) = vi_last_change.clone() {
+                                    match change {
+                                        ViChange::Insert(s) => {
+                                            push_undo(&input, cursor_pos);
+                                            for ch in s.chars() {
+                                                insert_char_at(&mut input, cursor_pos, ch);
+                                                cursor_pos += 1;
+                                            }
+                                        }
+                                        ViChange::Delete(from, to) => {
+                                            let from_byte = char_to_byte(&input, *from);
+                                            let to_byte = char_to_byte(&input, *to);
+                                            if from_byte < to_byte && to_byte <= input.len() {
+                                                push_undo(&input, cursor_pos);
+                                                input.drain(from_byte..to_byte);
+                                                if cursor_pos > input.chars().count() {
+                                                    cursor_pos = input.chars().count();
+                                                }
+                                            }
+                                        }
+                                        ViChange::Change(from, to, s) => {
+                                            let from_byte = char_to_byte(&input, *from);
+                                            let to_byte = char_to_byte(&input, *to);
+                                            push_undo(&input, cursor_pos);
+                                            if from_byte < to_byte && to_byte <= input.len() {
+                                                input.drain(from_byte..to_byte);
+                                            }
+                                            let insert_pos = from;
+                                            let mut pos = *insert_pos;
+                                            for ch in s.chars() {
+                                                insert_char_at(&mut input, pos, ch);
+                                                pos += 1;
+                                            }
+                                            cursor_pos = pos;
+                                            mode = EditorMode::ViInsert;
+                                            switched_to_insert = true;
+                                        }
+                                    }
+                                    redraw(&rctx, &input, cursor_pos, &suggestion)?;
                                 }
                             }
                             _ => {
@@ -1055,12 +1583,12 @@ pub fn read_line_editor(
                                 redraw(&rctx, &input, cursor_pos, &suggestion)?;
                             }
                             KeyCode::Char('w') if modifiers.contains(KeyModifiers::CONTROL) => {
-                                let delimiters: Vec<char> = editor_cfg.word_delimiters.chars().collect();
                                 let chars: Vec<char> = input.chars().collect();
                                 let mut new_pos = cursor_pos;
-                                while new_pos > 0 {
-                                    let ch = chars[new_pos - 1];
-                                    if delimiters.contains(&ch) { break; }
+                                while new_pos > 0 && chars[new_pos - 1].is_whitespace() {
+                                    new_pos -= 1;
+                                }
+                                while new_pos > 0 && !chars[new_pos - 1].is_whitespace() {
                                     new_pos -= 1;
                                 }
                                 if new_pos < cursor_pos {
@@ -1219,15 +1747,30 @@ pub fn read_line_editor(
                                 }
                             }
                             KeyCode::Tab => {
-                                let max_len = editor_cfg.max_line_length as usize;
-                                if max_len > 0 && input.chars().count() >= max_len {
+                                let completions = crate::shell::builtin::get_completions(&input, cursor_pos);
+                                if completions.len() == 1 {
+                                    let ws = find_word_start(&input, cursor_pos);
+                                    let byte_start = char_to_byte(&input, ws);
+                                    let byte_end = char_to_byte(&input, cursor_pos);
+                                    input.replace_range(byte_start..byte_end, &completions[0]);
+                                    cursor_pos = ws + completions[0].chars().count();
+                                    history_offset = None;
+                                    redraw(&rctx, &input, cursor_pos, "")?;
+                                } else if completions.len() > 1 {
+                                    let common = tab_common_prefix(&completions);
+                                    if !common.is_empty() {
+                                        let ws = find_word_start(&input, cursor_pos);
+                                        let byte_start = char_to_byte(&input, ws);
+                                        let byte_end = char_to_byte(&input, cursor_pos);
+                                        input.replace_range(byte_start..byte_end, &common);
+                                        cursor_pos = ws + common.chars().count();
+                                    }
                                     terminal_bell(&editor_cfg.bell);
-                                    continue;
+                                    history_offset = None;
+                                    redraw(&rctx, &input, cursor_pos, "")?;
+                                } else {
+                                    terminal_bell(&editor_cfg.bell);
                                 }
-                                insert_char_at(&mut input, cursor_pos, '\t');
-                                cursor_pos += 1;
-                                history_offset = None;
-                                redraw(&rctx, &input, cursor_pos, &suggestion)?;
                             }
                             KeyCode::Esc if mode == EditorMode::ViInsert => {
                                 mode = EditorMode::ViNormal;
@@ -1482,37 +2025,65 @@ fn visible_str_len(s: &str) -> usize {
     len
 }
 
+fn starts_with_ci(haystack: &str, needle: &[char]) -> bool {
+    let mut h = haystack.chars();
+    for &nc in needle {
+        match h.next() {
+            Some(c) if c.to_ascii_lowercase() == nc => {}
+            _ => return false,
+        }
+    }
+    true
+}
+
+fn find_ci_char_pos(haystack: &[char], needle: &[char]) -> Option<usize> {
+    if needle.is_empty() {
+        return Some(0);
+    }
+    if haystack.len() < needle.len() {
+        return None;
+    }
+    'outer: for i in 0..=(haystack.len() - needle.len()) {
+        for (j, &nc) in needle.iter().enumerate() {
+            if haystack[i + j].to_ascii_lowercase() != nc {
+                continue 'outer;
+            }
+        }
+        return Some(i);
+    }
+    None
+}
+
 fn find_suggestion(input: &str, history: &[String], case_sensitive: bool, substring: bool) -> String {
     if input.is_empty() {
         return String::new();
     }
     let input_lower: Vec<char> = input.chars().map(|c| c.to_ascii_lowercase()).collect();
-    let input_lower_str: String = input_lower.iter().collect();
     for entry in history.iter().rev() {
         let matches = if case_sensitive {
             entry.starts_with(input)
         } else {
-            entry.to_lowercase().starts_with(&input_lower_str)
+            starts_with_ci(entry, &input_lower)
         };
         if matches && entry != input {
-            return entry[input.len()..].to_string();
+            let char_count = input_lower.len();
+            return entry.char_indices().nth(char_count).map_or(String::new(), |(i, _)| entry[i..].to_string());
         }
     }
     if substring {
-        let input_lower_str = input_lower_str.clone();
         for entry in history.iter().rev() {
             if entry == input {
                 continue;
             }
-            let contains = if case_sensitive {
-                entry.contains(input)
+            if case_sensitive {
+                if let Some(byte_pos) = entry.find(input) {
+                    return entry[byte_pos..].to_string();
+                }
             } else {
-                entry.to_lowercase().contains(&input_lower_str)
-            };
-            if contains {
-                let entry_lower: Vec<char> = entry.chars().map(|c| c.to_ascii_lowercase()).collect();
-                if let Some(pos) = entry_lower.windows(input_lower.len()).position(|w| w == input_lower.as_slice()) {
-                    return entry[pos + input.len()..].to_string();
+                let entry_chars: Vec<char> = entry.chars().collect();
+                if let Some(char_pos) = find_ci_char_pos(&entry_chars, &input_lower) {
+                    let byte_pos = entry.char_indices().nth(char_pos).map(|(i, _)| i).unwrap_or(entry.len());
+                    return entry[byte_pos..].to_string();
                 }
             }
         }

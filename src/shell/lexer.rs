@@ -1,4 +1,7 @@
 use std::fmt;
+use std::sync::atomic::Ordering;
+
+use crate::shell::expand::CURRENT_LINE;
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Token {
@@ -18,13 +21,18 @@ pub enum Token {
     DoubleAmp,
     Semi,
     DoubleSemi,
+    SemiAmp,
+    SemiSemiAmp,
     DoubleGreater,
     Greater,
     Less,
     LessLess,
     LessLessLess,
     LessLessDash,
+    LessGreater,
     LessAmp,
+    LessLParen,
+    GreaterLParen,
     AmpGreater,
     AmpGreaterGreater,
     GreaterPipe,
@@ -49,6 +57,7 @@ pub enum Token {
     Esac,
     Function,
     Select,
+    Coproc,
 }
 
 impl fmt::Display for Token {
@@ -70,13 +79,18 @@ impl fmt::Display for Token {
             Token::DoubleAmp => write!(f, "&&"),
             Token::Semi => write!(f, ";"),
             Token::DoubleSemi => write!(f, ";;"),
+            Token::SemiAmp => write!(f, ";&"),
+            Token::SemiSemiAmp => write!(f, ";;&"),
             Token::DoubleGreater => write!(f, ">>"),
             Token::Greater => write!(f, ">"),
             Token::Less => write!(f, "<"),
             Token::LessLess => write!(f, "<<"),
             Token::LessLessLess => write!(f, "<<<"),
             Token::LessLessDash => write!(f, "<<-"),
+            Token::LessGreater => write!(f, "<>"),
             Token::LessAmp => write!(f, "<&"),
+            Token::LessLParen => write!(f, "<("),
+            Token::GreaterLParen => write!(f, ">("),
             Token::AmpGreater => write!(f, "&>"),
             Token::AmpGreaterGreater => write!(f, "&>>"),
             Token::GreaterPipe => write!(f, ">|"),
@@ -100,6 +114,7 @@ impl fmt::Display for Token {
             Token::Esac => write!(f, "esac"),
             Token::Function => write!(f, "function"),
             Token::Select => write!(f, "select"),
+            Token::Coproc => write!(f, "coproc"),
         }
     }
 }
@@ -135,6 +150,7 @@ impl Lexer {
             "esac" => Token::Esac,
             "function" => Token::Function,
             "select" => Token::Select,
+            "coproc" => Token::Coproc,
             _ => Token::Word(word.to_string()),
         }
     }
@@ -146,6 +162,9 @@ impl Lexer {
     fn advance(&mut self) -> Option<char> {
         let ch = self.input.get(self.pos).copied();
         self.pos += 1;
+        if ch == Some('\n') {
+            CURRENT_LINE.fetch_add(1, Ordering::Relaxed);
+        }
         ch
     }
 
@@ -225,16 +244,31 @@ impl Lexer {
                 self.advance();
                 let mut sub = String::from("$(");
                 let mut depth = 1u32;
+                let mut in_single = false;
+                let mut in_double = false;
                 while let Some(c) = self.peek() {
-                    match c {
-                        '(' => { depth += 1; sub.push(c); self.advance(); }
-                        ')' => {
-                            depth -= 1;
-                            sub.push(c);
-                            self.advance();
-                            if depth == 0 { break; }
+                    if c == '\'' && !in_double {
+                        in_single = !in_single;
+                        sub.push(c);
+                        self.advance();
+                    } else if c == '"' && !in_single {
+                        in_double = !in_double;
+                        sub.push(c);
+                        self.advance();
+                    } else if in_single || in_double {
+                        sub.push(c);
+                        self.advance();
+                    } else {
+                        match c {
+                            '(' => { depth += 1; sub.push(c); self.advance(); }
+                            ')' => {
+                                depth -= 1;
+                                sub.push(c);
+                                self.advance();
+                                if depth == 0 { break; }
+                            }
+                            _ => { sub.push(c); self.advance(); }
                         }
-                        _ => { sub.push(c); self.advance(); }
                     }
                 }
                 sub
@@ -243,20 +277,35 @@ impl Lexer {
                 self.advance();
                 let mut var = String::from("${");
                 let mut depth = 1u32;
+                let mut in_single = false;
+                let mut in_double = false;
                 while let Some(c) = self.peek() {
-                    match c {
-                        '{' => { depth += 1; var.push(c); }
-                        '}' => {
-                            var.push(c);
-                            depth -= 1;
-                            if depth == 0 {
-                                self.advance();
-                                break;
+                    if c == '\'' && !in_double {
+                        in_single = !in_single;
+                        var.push(c);
+                        self.advance();
+                    } else if c == '"' && !in_single {
+                        in_double = !in_double;
+                        var.push(c);
+                        self.advance();
+                    } else if in_single || in_double {
+                        var.push(c);
+                        self.advance();
+                    } else {
+                        match c {
+                            '{' => { depth += 1; var.push(c); }
+                            '}' => {
+                                var.push(c);
+                                depth -= 1;
+                                if depth == 0 {
+                                    self.advance();
+                                    break;
+                                }
                             }
+                            _ => { var.push(c); }
                         }
-                        _ => { var.push(c); }
+                        self.advance();
                     }
-                    self.advance();
                 }
                 var
             }
@@ -302,8 +351,13 @@ impl Lexer {
                 '\\' => {
                     if let Some(next) = self.advance()
                         && next != '\n' {
-                            s.push('\\');
-                            s.push(next);
+                            match next {
+                                '$' | '`' | '\\' | '"' => s.push(next),
+                                _ => {
+                                    s.push('\\');
+                                    s.push(next);
+                                }
+                            }
                         }
                 }
                 _ => s.push(ch),
@@ -543,7 +597,15 @@ impl Lexer {
                     self.advance();
                     if self.peek() == Some(';') {
                         self.advance();
-                        tokens.push(Token::DoubleSemi);
+                        if self.peek() == Some('&') {
+                            self.advance();
+                            tokens.push(Token::SemiSemiAmp);
+                        } else {
+                            tokens.push(Token::DoubleSemi);
+                        }
+                    } else if self.peek() == Some('&') {
+                        self.advance();
+                        tokens.push(Token::SemiAmp);
                     } else {
                         tokens.push(Token::Semi);
                     }
@@ -569,6 +631,10 @@ impl Lexer {
                             self.advance();
                             tokens.push(Token::GreaterAmp);
                         }
+                        Some('(') => {
+                            self.advance();
+                            tokens.push(Token::GreaterLParen);
+                        }
                         _ => tokens.push(Token::Greater),
                     }
                 }
@@ -587,9 +653,17 @@ impl Lexer {
                                 tokens.push(Token::LessLess);
                             }
                         }
+                        Some('>') => {
+                            self.advance();
+                            tokens.push(Token::LessGreater);
+                        }
                         Some('&') => {
                             self.advance();
                             tokens.push(Token::LessAmp);
+                        }
+                        Some('(') => {
+                            self.advance();
+                            tokens.push(Token::LessLParen);
                         }
                         _ => tokens.push(Token::Less),
                     }
@@ -824,4 +898,203 @@ mod tests {
         assert!(tokens.contains(&Token::LBrace));
         assert!(tokens.contains(&Token::RBrace));
     }
+
+    #[test]
+    fn test_here_string_quoted() {
+        let tokens = tokenize("cat <<<\"hello world\"");
+        assert!(tokens.contains(&Token::LessLessLess));
+        assert!(tokens.contains(&Token::DoubleQuoted("hello world".into())));
+    }
+
+    #[test]
+    fn test_dollar_paren_in_double_quotes() {
+        let tokens = tokenize(r#"echo "$(cmd)""#);
+        let found = tokens.iter().any(|t| matches!(t, Token::DoubleQuoted(w) if w.contains("$(cmd)")));
+        assert!(found);
+    }
+
+    #[test]
+    fn test_dollar_brace_question() {
+        let tokens = tokenize("echo ${var:?message}");
+        assert!(tokens.contains(&Token::Word("${var:?message}".into())));
+    }
+
+    #[test]
+    fn test_redirect_stderr_to_devnull() {
+        let tokens = tokenize("cmd 2>/dev/null");
+        assert!(tokens.contains(&Token::Word("2".into())));
+        assert!(tokens.contains(&Token::Greater));
+        assert!(tokens.contains(&Token::Word("/dev/null".into())));
+    }
+
+    #[test]
+    fn test_amp_background() {
+        let tokens = tokenize("sleep 10 &");
+        assert!(tokens.contains(&Token::Amp));
+        assert!(tokens.contains(&Token::Word("sleep".into())));
+        assert!(tokens.contains(&Token::Word("10".into())));
+    }
+
+    #[test]
+    fn test_coproc_keyword() {
+        let tokens = tokenize("coproc cmd");
+        assert!(tokens.contains(&Token::Coproc));
+        assert!(tokens.contains(&Token::Word("cmd".into())));
+    }
+
+    #[test]
+    fn test_double_less_less_dash() {
+        let tokens = tokenize("cat <<-EOF");
+        assert!(tokens.contains(&Token::LessLessDash));
+        assert!(tokens.contains(&Token::Word("EOF".into())));
+    }
+
+    #[test]
+    fn test_process_substitution_in() {
+        let tokens = tokenize("diff <(cmd1) <(cmd2)");
+        assert!(tokens.contains(&Token::LessLParen));
+    }
+
+    #[test]
+    fn test_process_substitution_out() {
+        let tokens = tokenize("echo >(cmd)");
+        assert!(tokens.contains(&Token::GreaterLParen));
+    }
+
+    #[test]
+    fn test_redirect_fd_num() {
+        let tokens = tokenize("echo x 3>&1");
+        assert!(tokens.contains(&Token::Word("3".into())));
+        assert!(tokens.contains(&Token::GreaterAmp));
+    }
+
+    #[test]
+    fn test_case_keywords() {
+        let tokens = tokenize("case x in a) ;; esac");
+        assert!(tokens.contains(&Token::Case));
+        assert!(tokens.contains(&Token::In));
+        assert!(tokens.contains(&Token::Esac));
+        assert!(tokens.contains(&Token::DoubleSemi));
+    }
+
+    #[test]
+    fn test_select_keyword() {
+        let tokens = tokenize("select i in 1 2 3; do echo $i; done");
+        assert!(tokens.contains(&Token::Select));
+        assert!(tokens.contains(&Token::Do));
+        assert!(tokens.contains(&Token::Done));
+    }
+
+    #[test]
+    fn test_dollar_zero() {
+        let tokens = tokenize("echo $0");
+        assert!(tokens.contains(&Token::Word("$0".into())));
+    }
+
+    #[test]
+    fn test_dollar_hash() {
+        let tokens = tokenize("echo $#");
+        assert!(tokens.contains(&Token::Word("$#".into())));
+    }
+
+    #[test]
+    fn test_dollar_bang() {
+        let tokens = tokenize("echo $!");
+        assert!(tokens.contains(&Token::Word("$!".into())));
+    }
+
+    #[test]
+    fn test_dollar_underscore() {
+        let tokens = tokenize("echo $_");
+        assert!(tokens.contains(&Token::Word("$_".into())));
+    }
+
+    #[test]
+    fn test_ansi_c_quoted() {
+        let tokens = tokenize(r#"echo $'hello\nworld'"#);
+        let found = tokens.iter().any(|t| matches!(t, Token::Word(w) if w.starts_with("$'")));
+        assert!(found);
+    }
+
+    #[test]
+    fn test_backtick_in_word() {
+        let tokens = tokenize("echo `whoami`");
+        assert!(tokens.contains(&Token::Backtick("whoami".into())));
+    }
+
+    #[test]
+    fn test_less_greater_redirect() {
+        let tokens = tokenize("cmd <> file");
+        assert!(tokens.contains(&Token::LessGreater));
+    }
+
+    #[test]
+    fn test_double_bracket() {
+        let tokens = tokenize("[[ -f file ]]");
+        assert!(tokens.contains(&Token::DoubleLBracket));
+        assert!(tokens.contains(&Token::DoubleRBracket));
+    }
+
+    #[test]
+    fn test_word_with_equals() {
+        let tokens = tokenize("VAR=value");
+        assert!(tokens.contains(&Token::Word("VAR=value".into())));
+    }
+
+    #[test]
+    fn test_escape_newline_in_word() {
+        let tokens = tokenize("echo hello\\\nworld");
+        let word_tokens: Vec<&Token> = tokens.iter().filter(|t| matches!(t, Token::Word(w) if w == "helloworld")).collect();
+        assert_eq!(word_tokens.len(), 1);
+    }
+
+    #[test]
+    fn test_dollar_star() {
+        let tokens = tokenize("echo $*");
+        assert!(tokens.contains(&Token::Word("$*".into())));
+    }
+
+    #[test]
+    fn test_dollar_at() {
+        let tokens = tokenize("echo $@");
+        assert!(tokens.contains(&Token::Word("$@".into())));
+    }
+
+    #[test]
+    fn test_dollar_double_paren() {
+        let tokens = tokenize("echo $((1+2))");
+        assert!(tokens.contains(&Token::Word("$((1+2))".into())));
+    }
+
+    #[test]
+    fn test_semi_amp_case() {
+        let tokens = tokenize("case x in a) cmd ;;& esac");
+        assert!(tokens.contains(&Token::SemiSemiAmp));
+    }
+
+    #[test]
+    fn test_amp_semi_case() {
+        let tokens = tokenize("case x in a) cmd ;& esac");
+        assert!(tokens.contains(&Token::SemiAmp));
+    }
+
+    #[test]
+    fn test_less_less_less_here_string() {
+        let tokens = tokenize("cat <<<hello");
+        assert!(tokens.contains(&Token::LessLessLess));
+    }
+
+    #[test]
+    fn test_redirect_input_fd() {
+        let tokens = tokenize("cat <&0");
+        assert!(tokens.contains(&Token::LessAmp));
+    }
+
+    #[test]
+    fn test_redirect_open() {
+        let tokens = tokenize("cmd <> file");
+        assert!(tokens.contains(&Token::LessGreater));
+    }
 }
+
+

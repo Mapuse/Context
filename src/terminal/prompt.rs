@@ -3,38 +3,46 @@ use crate::shell::env::Env;
 use super::color::*;
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::{Instant, Duration};
 
-fn effective_symbol_mode(cfg: &Config) -> String {
-    if cfg.modes.symbol_mode != "unicode" {
-        return cfg.modes.symbol_mode.clone();
-    }
-    cfg.display.utf8_mode.clone()
+pub static COMMAND_COUNT: AtomicUsize = AtomicUsize::new(0);
+static HIST_COUNT: AtomicUsize = AtomicUsize::new(0);
+
+pub fn set_hist_count(count: usize) {
+    HIST_COUNT.store(count, Ordering::Relaxed);
 }
 
-fn adapt_symbol(symbol: &str, mode: &str) -> String {
+fn effective_symbol_mode(cfg: &Config) -> &str {
+    if cfg.modes.symbol_mode != "unicode" {
+        return &cfg.modes.symbol_mode;
+    }
+    &cfg.display.utf8_mode
+}
+
+fn adapt_symbol<'a>(symbol: &'a str, mode: &str) -> &'a str {
     if mode == "ascii" {
         match symbol {
-            "\u{276f}" | "\u{276C}" | "\u{276E}" => ">".to_string(),
-            "\u{2713}" => "+".to_string(),
-            "\u{2718}" | "\u{2717}" | "\u{2716}" => "X".to_string(),
-            "\u{26A0}" => "!".to_string(),
-            "\u{25B8}" | "\u{25E6}" => ">".to_string(),
-            "\u{2192}" => "->".to_string(),
-            "\u{00B7}" => ".".to_string(),
-            "\u{2500}" => "-".to_string(),
-            "\u{2502}" => "|".to_string(),
-            "\u{256D}" | "\u{256E}" | "\u{2570}" | "\u{256F}" => "+".to_string(),
-            "\u{23FF}" => "~".to_string(),
-            "\u{2026}" => "...".to_string(),
-            "\u{2191}" => "^".to_string(),
-            "\u{2193}" => "v".to_string(),
-            "\u{2022}" => "*".to_string(),
-            _ => symbol.to_string(),
+            "\u{276f}" | "\u{276C}" | "\u{276E}" => ">",
+            "\u{2713}" => "+",
+            "\u{2718}" | "\u{2717}" | "\u{2716}" => "X",
+            "\u{26A0}" => "!",
+            "\u{25B8}" | "\u{25E6}" => ">",
+            "\u{2192}" => "->",
+            "\u{00B7}" => ".",
+            "\u{2500}" => "-",
+            "\u{2502}" => "|",
+            "\u{256D}" | "\u{256E}" | "\u{2570}" | "\u{256F}" => "+",
+            "\u{23FF}" => "~",
+            "\u{2026}" => "...",
+            "\u{2191}" => "^",
+            "\u{2193}" => "v",
+            "\u{2022}" => "*",
+            _ => symbol,
         }
     } else {
-        symbol.to_string()
+        symbol
     }
 }
 
@@ -124,7 +132,8 @@ pub fn render_prompt(env: &Env, cfg: &Config, last_status: i32) -> PromptDisplay
     if !compact && cfg.display.title_bar {
         let title = expand_prompt_vars(&cfg.display.title_bar_format.single(), env, cfg, last_status);
         let width = get_terminal_width();
-        let separator = adapt_symbol(&"─".repeat(width), &effective_symbol_mode(cfg));
+        let separator_line = "─".repeat(width);
+        let separator = adapt_symbol(&separator_line, effective_symbol_mode(cfg));
         let color = hex_to_ansi(&cfg.display.title_bar_color);
         header.push_str(&format!("{}{}{}", color, separator, reset()));
         header.push('\n');
@@ -342,7 +351,7 @@ fn render_symbol_line(env: &Env, cfg: &Config, last_status: i32) -> String {
     let mut line = String::new();
 
     if !prefix.is_empty() {
-        let adapted_prefix = adapt_symbol(&prefix, &effective_symbol_mode(cfg));
+        let adapted_prefix = adapt_symbol(&prefix, effective_symbol_mode(cfg));
         line.push_str(&format!("{}{}{}", hex_to_ansi(&cfg.prompt.color_prompt), adapted_prefix, reset()));
         line.push(' ');
     }
@@ -389,7 +398,7 @@ fn render_symbol_line(env: &Env, cfg: &Config, last_status: i32) -> String {
     }
 
     if !suffix.is_empty() {
-        let adapted_suffix = adapt_symbol(&suffix, &effective_symbol_mode(cfg));
+        let adapted_suffix = adapt_symbol(&suffix, effective_symbol_mode(cfg));
         line.push(' ');
         line.push_str(&format!("{}{}{}", hex_to_ansi(&cfg.prompt.color_cwd), adapted_suffix, reset()));
     }
@@ -490,7 +499,7 @@ pub fn get_terminal_width() -> usize {
 
 fn find_git_branch() -> String {
     let mut dir = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
-    for _ in 0..5 {
+    for _ in 0..20 {
         let head = dir.join(".git/HEAD");
         if let Ok(content) = std::fs::read_to_string(&head) {
             let content = content.trim();
@@ -516,20 +525,54 @@ struct GitStatus {
     behind: u32,
 }
 
+static GIT_CACHE: OnceLock<Mutex<Option<(String, String, Instant)>>> = OnceLock::new();
+
 fn find_git_status() -> GitStatus {
+    let cache = GIT_CACHE.get_or_init(|| Mutex::new(None));
+    let cwd = std::env::current_dir()
+        .map(|p| p.to_string_lossy().to_string())
+        .unwrap_or_default();
+    {
+        let guard = cache.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some((ref cached_cwd, ref cached_result, ref cached_time)) = *guard
+            && *cached_cwd == cwd
+                && cached_time.elapsed() < Duration::from_secs(2)
+            {
+                return parse_git_status_output(cached_result);
+            }
+    }
+    let output = match Command::new("git")
+        .args(["status", "--porcelain=v1", "-b"])
+        .output()
+    {
+        Ok(o) if o.status.success() => String::from_utf8_lossy(&o.stdout).to_string(),
+        _ => {
+            let mut guard = cache.lock().unwrap_or_else(|e| e.into_inner());
+            *guard = Some((cwd, String::new(), Instant::now()));
+            return GitStatus {
+                dirty: false,
+                staged: 0,
+                untracked: 0,
+                ahead: 0,
+                behind: 0,
+            };
+        }
+    };
+    let result = output.clone();
+    {
+        let mut guard = cache.lock().unwrap_or_else(|e| e.into_inner());
+        *guard = Some((cwd, result, Instant::now()));
+    }
+    parse_git_status_output(&output)
+}
+
+fn parse_git_status_output(output: &str) -> GitStatus {
     let mut status = GitStatus {
         dirty: false,
         staged: 0,
         untracked: 0,
         ahead: 0,
         behind: 0,
-    };
-    let output = match Command::new("git")
-        .args(["status", "--porcelain=v1", "-b"])
-        .output()
-    {
-        Ok(o) if o.status.success() => String::from_utf8_lossy(&o.stdout).to_string(),
-        _ => return status,
     };
     for line in output.lines() {
         if line.starts_with("## ") {
@@ -564,11 +607,107 @@ fn find_git_status() -> GitStatus {
 }
 
 fn interpret_escapes(s: &str) -> String {
-    s.replace("\\033", "\x1b")
-        .replace("\\e", "\x1b")
-        .replace("\\n", "\n")
-        .replace("\\t", "\t")
-        .replace("\\\\", "\\")
+    let chars: Vec<char> = s.chars().collect();
+    let len = chars.len();
+    let mut result = String::new();
+    let mut i = 0;
+    while i < len {
+        if chars[i] == '\\' && i + 1 < len {
+            i += 1;
+            match chars[i] {
+                '0' => {
+                    if i + 1 < len && chars[i + 1] == 'x' {
+                        i += 1;
+                        let mut hex = String::new();
+                        i += 1;
+                        while i < len && hex.len() < 2 && chars[i].is_ascii_hexdigit() {
+                            hex.push(chars[i]);
+                            i += 1;
+                        }
+                        if let Ok(byte) = u8::from_str_radix(&hex, 16) {
+                            result.push(byte as char);
+                        }
+                        continue;
+                    }
+                    let mut oct = String::new();
+                    i += 1;
+                    while i < len && oct.len() < 3 && matches!(chars[i], '0'..='7') {
+                        oct.push(chars[i]);
+                        i += 1;
+                    }
+                    if !oct.is_empty()
+                        && let Ok(byte) = u8::from_str_radix(&oct, 8) {
+                            result.push(byte as char);
+                        }
+                    continue;
+                }
+                'x' => {
+                    i += 1;
+                    let mut hex = String::new();
+                    while i < len && hex.len() < 2 && chars[i].is_ascii_hexdigit() {
+                        hex.push(chars[i]);
+                        i += 1;
+                    }
+                    if let Ok(byte) = u8::from_str_radix(&hex, 16) {
+                        result.push(byte as char);
+                    }
+                    continue;
+                }
+                'u' => {
+                    i += 1;
+                    let mut hex = String::new();
+                    while i < len && hex.len() < 4 && chars[i].is_ascii_hexdigit() {
+                        hex.push(chars[i]);
+                        i += 1;
+                    }
+                    if let Ok(code) = u32::from_str_radix(&hex, 16)
+                        && let Some(c) = char::from_u32(code) {
+                            result.push(c);
+                        }
+                    continue;
+                }
+                'U' => {
+                    i += 1;
+                    let mut hex = String::new();
+                    while i < len && hex.len() < 8 && chars[i].is_ascii_hexdigit() {
+                        hex.push(chars[i]);
+                        i += 1;
+                    }
+                    if let Ok(code) = u32::from_str_radix(&hex, 16)
+                        && let Some(c) = char::from_u32(code) {
+                            result.push(c);
+                        }
+                    continue;
+                }
+                '1'..='7' => {
+                    let mut oct = String::new();
+                    oct.push(chars[i]);
+                    i += 1;
+                    while i < len && oct.len() < 3 && matches!(chars[i], '0'..='7') {
+                        oct.push(chars[i]);
+                        i += 1;
+                    }
+                    if let Ok(byte) = u8::from_str_radix(&oct, 8) {
+                        result.push(byte as char);
+                    }
+                    continue;
+                }
+                'n' => result.push('\n'),
+                't' => result.push('\t'),
+                '\\' => result.push('\\'),
+                'e' => result.push('\x1b'),
+                _ => {
+                    result.push('\\');
+                    result.push(chars[i]);
+                }
+            }
+            i += 1;
+        } else {
+            result.push(chars[i]);
+            i += 1;
+        }
+    }
+    result
 }
 
 fn format_duration(ms: u64) -> String {
@@ -605,19 +744,26 @@ pub fn expand_prompt_vars(s: &str, env: &Env, cfg: &Config, last_status: i32) ->
         let day = tm.tm_mday;
         let year = tm.tm_year + 1900;
 
+        let hh_s = format!("{:02}", hh);
+        let mm_s = format!("{:02}", mm);
+        let ss_s = format!("{:02}", ss);
+        let year_s = format!("{:04}", year);
+        let mon_s = format!("{:02}", mon);
+        let day_s = format!("{:02}", day);
+
         let format_time = |fmt: &str| -> String {
-            fmt.replace("%H", &format!("{:02}", hh))
-                .replace("%M", &format!("{:02}", mm))
-                .replace("%S", &format!("{:02}", ss))
-                .replace("%Y", &format!("{:04}", year))
-                .replace("%m", &format!("{:02}", mon))
-                .replace("%d", &format!("{:02}", day))
+            fmt.replace("%H", &hh_s)
+                .replace("%M", &mm_s)
+                .replace("%S", &ss_s)
+                .replace("%Y", &year_s)
+                .replace("%m", &mon_s)
+                .replace("%d", &day_s)
         };
 
         (
             format_time(&cfg.display.timestamp_format),
-            format!("{:02}:{:02}:{:02}", hh, mm, ss),
-            format!("{:04}-{:02}-{:02}", year, mon, day),
+            format!("{}:{}:{}", hh_s, mm_s, ss_s),
+            format!("{}-{}-{}", year_s, mon_s, day_s),
         )
     };
     let git_status = find_git_status();
@@ -639,20 +785,17 @@ pub fn expand_prompt_vars(s: &str, env: &Env, cfg: &Config, last_status: i32) ->
     let git_ahead = if git_status.ahead > 0 { cfg.prompt.git_ahead_char.clone() } else { String::new() };
     let git_behind = if git_status.behind > 0 { cfg.prompt.git_behind_char.clone() } else { String::new() };
     let jobs = {
-        let mut count = 0u32;
-        let procs_dir = Path::new("/proc/self/task");
-        if let Ok(entries) = std::fs::read_dir(procs_dir) {
-            for entry in entries.flatten() {
-                let fd_dir = entry.path().join("children");
-                if let Ok(children) = std::fs::read_to_string(&fd_dir) {
-                    let trimmed = children.trim();
-                    if !trimmed.is_empty() {
-                        count += trimmed.split_whitespace().count() as u32;
-                    }
-                }
+        let children_file = Path::new("/proc/self/task/1/children");
+        if let Ok(children) = std::fs::read_to_string(children_file) {
+            let trimmed = children.trim();
+            if trimmed.is_empty() {
+                0u32
+            } else {
+                trimmed.split_whitespace().count() as u32
             }
+        } else {
+            0u32
         }
-        count
     };
     let status_str = if last_status == 0 { "ok" } else { "error" };
 
@@ -782,26 +925,32 @@ pub fn expand_prompt_vars(s: &str, env: &Env, cfg: &Config, last_status: i32) ->
         String::new()
     };
 
+    static NODE_VERSION_CACHE: OnceLock<String> = OnceLock::new();
     let node_version = if cfg.prompt.show_node_version {
-        Command::new("node")
-            .arg("--version")
-            .output()
-            .ok()
-            .and_then(|o| String::from_utf8(o.stdout).ok())
-            .map(|s| s.trim().to_string())
-            .unwrap_or_default()
+        NODE_VERSION_CACHE.get_or_init(|| {
+            Command::new("node")
+                .arg("--version")
+                .output()
+                .ok()
+                .and_then(|o| String::from_utf8(o.stdout).ok())
+                .map(|s| s.trim().to_string())
+                .unwrap_or_default()
+        }).clone()
     } else {
         String::new()
     };
 
+    static RUST_VERSION_CACHE: OnceLock<String> = OnceLock::new();
     let rust_version = if cfg.prompt.show_rust_version {
-        Command::new("rustc")
-            .arg("--version")
-            .output()
-            .ok()
-            .and_then(|o| String::from_utf8(o.stdout).ok())
-            .map(|s| s.trim().to_string())
-            .unwrap_or_default()
+        RUST_VERSION_CACHE.get_or_init(|| {
+            Command::new("rustc")
+                .arg("--version")
+                .output()
+                .ok()
+                .and_then(|o| String::from_utf8(o.stdout).ok())
+                .map(|s| s.trim().to_string())
+                .unwrap_or_default()
+        }).clone()
     } else {
         String::new()
     };
@@ -819,7 +968,7 @@ pub fn expand_prompt_vars(s: &str, env: &Env, cfg: &Config, last_status: i32) ->
         String::new()
     };
 
-    s.replace("{cwd}", &cwd_short)
+    let result = s.replace("{cwd}", &cwd_short)
         .replace("{short_cwd}", &short_cwd)
         .replace("{user}", &env.user())
         .replace("{host}", &env.hostname())
@@ -873,7 +1022,62 @@ pub fn expand_prompt_vars(s: &str, env: &Env, cfg: &Config, last_status: i32) ->
         .replace("{author}", &cfg.branding.author)
         .replace("{config_path}", &crate::config::loader::config_path().display().to_string())
         .replace("{shell_name}", &cfg.branding.shell_name)
-        .replace("{terminal_width}", &get_terminal_width().to_string())
+        .replace("{terminal_width}", &get_terminal_width().to_string());
+
+    if result.contains('\\') && (result.contains("\\u") || result.contains("\\h") || result.contains("\\H") || result.contains("\\w") || result.contains("\\W") || result.contains("\\d") || result.contains("\\t") || result.contains("\\T") || result.contains("\\@") || result.contains("\\$") || result.contains("\\v") || result.contains("\\V") || result.contains("\\e") || result.contains("\\s")) {
+        let home = env.home();
+        let username = env.user();
+        let hostname_full = env.hostname();
+        let hostname_short = hostname_full.split('.').next().unwrap_or(&hostname_full).to_string();
+        let (hh, mm, ss, mon_name, day) = unsafe {
+            let mut tm: libc::tm = std::mem::zeroed();
+            let now = libc::time(std::ptr::null_mut());
+            libc::localtime_r(&now, &mut tm);
+            let names = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+            let mon_name = names[tm.tm_mon as usize].to_string();
+            (tm.tm_hour, tm.tm_min, tm.tm_sec, mon_name, tm.tm_mday)
+        };
+        let cwd_display = if let Some(rest) = cwd.strip_prefix(&home) {
+            if rest.is_empty() {
+                "~".to_string()
+            } else {
+                format!("~{}", rest)
+            }
+        } else {
+            cwd.clone()
+        };
+        let cwd_base = cwd.split('/').next_back().unwrap_or(&cwd).to_string();
+        let am_pm = if hh < 12 { "AM" } else { "PM" };
+        let hh_12 = if hh == 0 { 12 } else if hh > 12 { hh - 12 } else { hh };
+        let is_root = unsafe { libc::getuid() == 0 };
+        let prompt_char = if is_root { "#" } else { "$" };
+        let vv = env!("CARGO_PKG_VERSION");
+        let ss_name = "context";
+        let hh_s = format!("{:02}", hh);
+        let mm_s = format!("{:02}", mm);
+        let ss_s = format!("{:02}", ss);
+        let mut out = result.clone();
+        out = out.replace("\\u", &username);
+        out = out.replace("\\h", &hostname_short);
+        out = out.replace("\\H", &hostname_full);
+        out = out.replace("\\w", &cwd_display);
+        out = out.replace("\\W", &cwd_base);
+        out = out.replace("\\d", &format!("{} {:02}", mon_name, day));
+        out = out.replace("\\t", &format!("{}:{}:{}", hh_s, mm_s, ss_s));
+        out = out.replace("\\T", &format!("{:02}:{}:{}", hh_12, mm_s, ss_s));
+        out = out.replace("\\@", &format!("{}:{} {}", hh_12, mm_s, am_pm));
+        out = out.replace("\\!", &HIST_COUNT.load(Ordering::Relaxed).to_string());
+        out = out.replace("\\#", &COMMAND_COUNT.load(Ordering::Relaxed).to_string());
+        out = out.replace("\\n", "\n");
+        out = out.replace("\\$", prompt_char);
+        out = out.replace("\\v", vv);
+        out = out.replace("\\V", &format!("{}-dev", vv));
+        out = out.replace("\\e", "\x1b");
+        out = out.replace("\\s", ss_name);
+        out
+    } else {
+        result
+    }
 }
 
 pub fn render_transient_prompt(env: &Env, cfg: &Config, last_status: i32) -> String {
@@ -943,5 +1147,56 @@ mod tests {
     fn test_shorten_cwd_max_depth() {
         let result = shorten_cwd("/system/local/bin/zsh", "/home/user", 2);
         assert_eq!(result, "…/bin/zsh");
+    }
+
+    #[test]
+    fn test_shorten_cwd_no_shortening_needed() {
+        let result = shorten_cwd("/usr/bin", "/home/user", 5);
+        assert_eq!(result, "/usr/bin");
+    }
+
+    #[test]
+    fn test_shorten_cwd_exact_max_depth() {
+        let result = shorten_cwd("/a/b/c", "/home/user", 3);
+        assert_eq!(result, "/a/b/c");
+    }
+
+    #[test]
+    fn test_format_duration_ms() {
+        assert_eq!(format_duration(500), "500ms");
+    }
+
+    #[test]
+    fn test_format_duration_seconds() {
+        assert_eq!(format_duration(3500), "3.5s");
+    }
+
+    #[test]
+    fn test_format_duration_minutes() {
+        assert_eq!(format_duration(125000), "2m5s");
+    }
+
+    #[test]
+    fn test_interpret_escapes_newline() {
+        let result = interpret_escapes("hello\\nworld");
+        assert_eq!(result, "hello\nworld");
+    }
+
+    #[test]
+    fn test_interpret_escapes_tab() {
+        let result = interpret_escapes("hello\\tworld");
+        assert_eq!(result, "hello\tworld");
+    }
+
+    #[test]
+    fn test_interpret_escapes_backslash() {
+        let result = interpret_escapes("hello\\\\world");
+        assert_eq!(result, "hello\\world");
+    }
+
+    #[test]
+    fn test_interpret_escapes_hex() {
+        let result = interpret_escapes("\\x41");
+        assert_eq!(result, "A");
     }
 }

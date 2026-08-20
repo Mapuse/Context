@@ -242,15 +242,15 @@ pub fn apply(cfg: &mut Config) {
     cfg.colors.info = apply("info", 7);
     cfg.colors.dim = apply("dim", 8);
 
-    let err_base = if cfg.colors.err.len() >= 7 { &cfg.colors.err[1..3] } else { "aa" };
-    let success_base = if cfg.colors.success.len() >= 7 { &cfg.colors.success[1..3] } else { "aa" };
-    let warning_base = if cfg.colors.warning.len() >= 7 { &cfg.colors.warning[1..3] } else { "aa" };
-    let info_base = if cfg.colors.info.len() >= 7 { &cfg.colors.info[1..3] } else { "aa" };
+    let err_base = if cfg.colors.err.len() >= 7 { cfg.colors.err[1..5].to_string() } else { "aaff".into() };
+    let success_base = if cfg.colors.success.len() >= 7 { cfg.colors.success[1..5].to_string() } else { "aaff".into() };
+    let warning_base = if cfg.colors.warning.len() >= 7 { cfg.colors.warning[1..5].to_string() } else { "aaff".into() };
+    let info_base = if cfg.colors.info.len() >= 7 { cfg.colors.info[1..5].to_string() } else { "aaff".into() };
 
-    cfg.colors.bg_err = format!("{}33", err_base);
-    cfg.colors.bg_success = format!("{}33", success_base);
-    cfg.colors.bg_warning = format!("{}33", warning_base);
-    cfg.colors.bg_info = format!("{}33", info_base);
+    cfg.colors.bg_err = format!("#{}00", err_base);
+    cfg.colors.bg_success = format!("#{}00", success_base);
+    cfg.colors.bg_warning = format!("#{}00", warning_base);
+    cfg.colors.bg_info = format!("#{}00", info_base);
 
     cfg.prompt.color_cwd = cfg.colors.accent.clone();
     cfg.prompt.color_prompt = cfg.colors.success.clone();

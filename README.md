@@ -157,33 +157,39 @@
 
 | Category | What |
 |----------|------|
-| Lexer | `$'...'` ANSI-C quoting, `[[`/`]]` tokens, `>>\|` clobber |
-| Shell syntax | `if`/`for`/`while`/`case`/functions/subshells/brace groups |
-| Builtins | 51 builtins (see Builtins Reference) |
-| Variable expansion | `${var:-def}`, `${var//old/new}`, `${var:=val}`, `${#var}`, `${##var}` |
+| Lexer | `$'...'` ANSI-C quoting, `[[`/`]]` tokens, `>>\|` clobber, `;&`/`;;&` case fall-through |
+| Shell syntax | `if`/`for`/`while`/`case`/functions/subshells/brace groups, `coproc` background coprocesses |
+| Builtins | 56 builtins including `coproc`, `fc`, `disown`, `suspend`, `complete`, `compgen`, `mapfile`, `readarray` |
+| POSIX compliance | Full POSIX shell semantics: positional params, `$@`/`$*` splitting, `set`/`shopt` options, `exec`, `trap`, `wait -n`, `pipefail` |
+| Variable expansion | `${var:-def}`, `${var//old/new}`, `${var:=val}`, `${#var}`, `${var@Q/@E/@U/@u/@a/@P}` |
 | Parameter extras | `${var:u}` uppercase, `${var:l}` lowercase, `${var:r}` strip ext, `${var:e}` ext only, `${var:t}` basename, `${var:h}` dirname |
-| Arithmetic | `let`, `(( ))`, `math` (float), operator precedence, parentheses |
-| Floating point | `math` builtin, configurable precision, scientific notation |
-| Regex | `regexmatch` builtin, captures into `$MATCH`, `$MATCH_0`, etc. |
-| Associative arrays | `declare -A`, `${name[key]}`, `${(k)name}`, `${(v)name}`, `${(kv)name}` |
-| Brace expansion | `echo {a,b,c}`, `echo {1..5}` |
-| Glob expansion | `*`, `?`, `[abc]`, `[a-z]`, `[!abc]` |
-| Multi-line input | Backslash `\` continuation, unclosed quotes, unclosed `$()` — shows `> ` continuation prompt |
-| Editor modes | Emacs mode with kill ring, undo/redo. Vi insert/normal mode with motions, operators, registers |
+| Arithmetic | `let`, `(( ))`, `math` (float), operator precedence, ternary, comma, hex/octal/binary literals |
+| Regex | `[[ $var =~ pattern ]]` with `BASH_REMATCH` array, `=~` operator |
+| Associative arrays | `declare -A`, `${name[key]}`, `${(k)name}`, `${(v)name}` |
+| Indexed arrays | `declare -a`, `${arr[@]}`, `${#arr[@]}`, `mapfile`, `readarray` |
+| Process substitution | `<()` and `>()` for feeding commands as file arguments |
+| Coprocess | `coproc NAME { cmd; }` — bidirectional pipe to background command |
+| Brace expansion | `echo {a,b,c}`, `echo {1..5}`, `echo {a..z..2}` |
+| Glob expansion | `*`, `?`, `[abc]`, `[a-z]`, `[!abc]`, `**` (globstar) |
+| Multi-line input | Backslash `\` continuation, unclosed quotes, unclosed `$()` |
+| Tab completion | Path completion, command name completion, custom completion via `complete -F/-C` |
+| Editor modes | Emacs mode with kill ring, undo/redo. Vi insert/normal/visual mode with motions (`w`/`W`/`b`/`f`/`F`/`t`/`T`), operators (`d`/`c`/`y`), visual selections (`d`/`y`/`u`/`U`), `.` repeat |
 | Word splitting | IFS-based splitting respects quoting context |
-| `[[ ]]` | Full test expressions with pattern matching, regex, grouping, logical operators |
-| Plugins | Shell-script plugins loaded from `~/.config/context/plugins/` |
+| `[[ ]]` | Full test expressions with pattern matching, regex, grouping, logical operators, `-nt`/`-ot`/`-ef` |
+| Shopt options | `extglob`, `globstar`, `nullglob`, `dotglob`, `failglob`, `nocaseglob`, `nocasematch`, `cmdhist`, `lithist`, `lastpipe` |
+| Traps | `trap`, `ERR` trap, `DEBUG` trap, `RETURN` trap, pseudo-signals |
 | Autosuggestions | Fish-style grey suggestions from history |
 | History | Shared across sessions via `flock`, `sync_history` on each prompt |
 | Named directories | `hash -d name=path`, `~name` expands to path |
-| Prompt | Multi-line cursor format, right prompt, transient, instant, async |
+| Prompt | Multi-line cursor format, right prompt, transient, instant, async, PS1 escapes (`\u`, `\h`, `\w`, `\t`, `\d`, `\!`, `\#`, `\v`, `\V`) |
 | Syntax highlighting | Real-time in the line editor |
 | Color system | Auto-detect: TrueColor → 256 → 16 → None. Any `#RRGGBB` hex. Wallpaper-based dynamic colors |
-| TOML config | 25 sections, 297 fields |
-| Job control | `fg`, `bg`, `jobs`, `&`, process groups |
-| Signal traps | `trap 'cmd' SIGINT` |
+| TOML config | 25 sections, 300 fields, hot-reload via `SIGUSR1` |
+| Job control | `fg`, `bg`, `jobs`, `disown`, `&`, `wait -n`, process groups |
+| Signal traps | `trap 'cmd' SIGINT`, ERR/DEBUG/RETURN traps |
 | Modules | `module load/unload/list/info` |
-| Bash compat | `bash_compat` flag for basic compatibility |
+| Bash compat | `BASH_REMATCH`, `LINENO`, `FUNCNAME`, `BASH_SOURCE`, `PIPESTATUS`, `BASH_ALIASES`, `BASH_CMDS`, `COPROC_PID`, `SECONDS` assignment |
+| Performance | Zero-copy prompt rendering, allocation-free autosuggestions, single-pass ANSI-aware width calculation |
 
 ---
 
@@ -969,6 +975,38 @@ Functions support local variables via `local`. Scope is managed with a scope sta
 { echo a; echo b; }   # brace group (no fork)
 ```
 
+**Process Substitution:**
+
+```sh
+diff <(ls /dir1) <(ls /dir2)     # compare directory listings
+while read line; do ... done < <(grep pattern file)  # feed command output
+```
+
+`<()` runs command and provides its stdout as a readable file descriptor. `>()` provides writable stdin.
+
+**Coprocess:**
+
+```sh
+coproc mycoproc { cat; }          # start coprocess
+echo "hello" >&${mycoproc[1]}     # write to coprocess stdin
+read -t 1 line <&${mycoproc[0]}   # read from coprocess stdout
+```
+
+Coprocesses run in the background with a bidirectional pipe. Access via `COPROC_PID`, `COPROC`, and named `COPROC_<name>_PID`.
+
+**Case fall-through:**
+
+```sh
+case "$1" in
+  start)  echo starting ;;&     # fall through to next pattern
+  run)    echo running ;;
+  stop)   echo stopping ;;&     # fall through to all remaining patterns
+  *)      echo other ;;
+esac
+```
+
+`;;&` checks the next pattern. `;;&` checks all remaining patterns.
+
 ---
 </details>
 
@@ -988,42 +1026,53 @@ Functions support local variables via `local`. Scope is managed with a scope sta
 | `alias NAME=VAL` | Define alias. `alias` → print all. |
 | `unalias NAME` | Remove alias |
 | `source FILE` / `. FILE` | Execute FILE as shell commands |
-| `history [N]` | Show last N entries. `-c` clears. |
-| `set [NAME=VAL]` | Set shell variable. `-e`, `-u`, `-x`, `-a` options. |
+| `history [N]` | Show last N entries. `-c` clears. `-d` delete entry. |
+| `set [NAME=VAL]` | Set shell variable. `-e`, `-u`, `-x`, `-a`, `-b`, `-B`, `-h`, `-o` options. |
 | `env` | Print all variables as NAME=VALUE |
 | `pwd` | Print working directory |
-| `type NAME` | Check if command is builtin or external |
+| `type NAME` | Check if command is builtin, function, or external |
 | `which NAME` | Print path to command |
 | `echo [-neE] [args]` | Print args. `-n` no newline. `-e` process escapes. `-E` disable escapes. |
-| `printf FMT [args]` | POSIX printf |
-| `test EXPR` / `[ EXPR ]` | Conditional test |
+| `printf FMT [args]` | POSIX printf with `%b`, `%q`, `%T` extensions |
+| `test EXPR` / `[ EXPR ]` | Conditional test with full operator set |
 | `let NAME=EXPR` | Arithmetic evaluation |
 | `(( EXPR ))` | Arithmetic evaluation (syntactic sugar) |
 | `math EXPR` | Floating point arithmetic |
-| `regexmatch STR PAT [VAR]` | Regex match, captures into `$MATCH`, `$MATCH_0`, `$MATCH_1`, etc. |
-| `exec CMD [args]` | Replace shell with CMD |
-| `trap 'CMD' SIG` | Set signal handler |
+| `exec CMD [args]` | Replace shell with CMD. `-l` login shell. `-a NAME` set argv[0]. |
+| `trap 'CMD' SIG` | Set signal handler. ERR/DEBUG/RETURN traps supported. |
 | `pushd [dir]` | Push current dir, cd to dir. Supports `+n`/`-n` rotation. |
 | `popd` | Pop and cd to top. Supports `+n`/`-n` removal. |
 | `dirs [-v] [-l] [-p]` | Print directory stack. `-v` numbered, `-l` long paths, `-p` one-per-line. |
 | `readonly NAME` | Mark variable as read-only |
-| `declare [-x] [-r] [-A] NAME=VAL` | Declare variable with attributes |
-| `hash -d name=path` | Define named directory. `hash -d name` unset. |
+| `declare [-x] [-r] [-A] [-a] [-i] [-l] [-u] [-n] [-g] [-t] NAME=VAL` | Declare variable with attributes |
+| `typeset` | Alias for `declare`. `-f` prints function body. |
+| `hash -d name=path` | Define named directory. `hash -r` clear. `hash -p` add to lookup table. |
 | `builtin CMD` | Verify CMD is a builtin |
-| `shopt [-s] [-u] [opt]` | Set/unset/query shell options |
-| `jobs` | List background jobs |
+| `shopt [-s] [-u] [opt]` | Set/unset shell options (extglob, globstar, nullglob, etc.) |
+| `jobs` | List background jobs. `-l` long. `-p` PIDs only. `-r` running. `-s` stopped. |
 | `fg [N]` | Bring job N to foreground |
 | `bg [N]` | Resume job N in background |
-| `wait [PID]` | Wait for child process |
-| `kill [-SIG] PID` | Send signal to process |
+| `wait [PID]` | Wait for child process. `-n` wait for any. |
+| `kill [-SIG] PID` | Send signal. `%N` resolves job IDs. `-l` list signals. |
 | `umask [MASK]` | Get/set file mode creation mask |
-| `command [-p] CMD` | Execute CMD ignoring aliases. `-v` prints path. |
+| `command [-p] CMD` | Execute CMD ignoring aliases. `-v` prints path. `-V` verbose. |
 | `eval STRING` | Evaluate STRING as shell commands |
 | `select NAME [in ITEMS]` | Interactive menu selection |
 | `getopts OPTSTRING NAME [ARGS]` | Parse positional options |
-| `read [-r] [-p PROMPT] [-s] [-a NAME] [-d DELIM] [-t TIMEOUT]` | Read line from stdin into variable(s) |
+| `read [-r] [-p PROMPT] [-s] [-a NAME] [-d DELIM] [-t TIMEOUT] [-e] [-i TEXT]` | Read line from stdin. `-e` line editor. `-i` initial text. `-t 0` non-blocking poll. |
 | `local NAME=VAL` | Declare local variable in function scope |
-| `module load/unload/list/info NAME` | Load/unload/list/info modules |
+| `break [N]` | Break out of loop N levels deep |
+| `continue [N]` | Continue to next iteration of loop N levels deep |
+| `return [N]` | Return from function with status N |
+| `suspend` | Suspend the shell (send SIGTSTP to self) |
+| `fc [-s] [first] [last]` | Fix command — list or re-execute history entries |
+| `disown [PID]` | Remove job from job table |
+| `coproc [NAME] CMD` | Start CMD as a coprocess with bidirectional pipe |
+| `enable [-f FILE] [-n NAME]` | Enable/disable builtins. `-f` load from shared library (stub). |
+| `complete [-F FUNC] [-C CMD] NAME` | Register completion handler for command. `-p` print. `-r` remove. |
+| `compgen [-A ACTION] [WORD]` | Generate completions. `-c` commands. `-f` files. `-d` directories. |
+| `mapfile [-d DELIM] [-n COUNT] [-O ORIGIN] [-s COUNT] [-t] [-u FD] [-C CALLBACK] [-c QUANTUM] ARRAY` | Read lines into indexed array |
+| `readarray` | Alias for `mapfile` |
 | `true` | Return 0 |
 | `false` | Return 1 |
 
@@ -1167,6 +1216,22 @@ Local variables are visible only within the enclosing function. They shadow oute
 | `-nt` | file newer than |
 | `-ot` | file older than |
 
+### Shell Options (shopt)
+
+| Option | Default | Description |
+|--------|---------|-------------|
+| `extglob` | off | Enable extended glob patterns: `+( )`, `*( )`, `?( )`, `@( )`, `!( )` |
+| `globstar` | off | `**` matches any files and zero or more directories and subdirectories |
+| `nullglob` | off | Glob patterns expand to nothing when no matches instead of the literal pattern |
+| `dotglob` | off | Include filenames beginning with a dot in glob results |
+| `failglob` | off | Throw an error when a glob pattern has no matches |
+| `nocaseglob` | off | Globbing is case-insensitive |
+| `nocasematch` | off | Pattern matching in `[[ ]]` and `case` is case-insensitive |
+| `cmdhist` | off | Save multi-line commands in history as single entries |
+| `lithist` | off | Save multi-line commands with newlines instead of semicolons |
+| `lastpipe` | off | Run the last command of a pipeline in the current shell process |
+| `xpg_echo` | off | `echo` interprets escape sequences by default |
+
 ---
 </details>
 
@@ -1249,7 +1314,7 @@ Max input length: `[editor] max_line_length` (default: 4096).
 | Ctrl+Z | Undo |
 | Ctrl+_ | Redo |
 | Ctrl+R | Reverse incremental history search |
-| Tab | Insert tab character |
+| Tab | Tab completion (paths, commands, custom completions) |
 | Up | Previous history entry |
 | Down | Next history entry |
 | Left | Move cursor left |
@@ -1265,7 +1330,7 @@ Max input length: `[editor] max_line_length` (default: 4096).
 
 Set `[editor] mode = "vi"` to enable.
 
-**Vi Insert Mode** — Same as Emacs mode (Ctrl+C clears, Ctrl+D exits, Ctrl+R searches, etc.)
+**Vi Insert Mode** — Same as Emacs mode (Ctrl+C clears, Ctrl+D exits, Ctrl+R searches, Tab completes)
 
 **Vi Normal Mode** — Press `Esc` from insert mode:
 
@@ -1273,19 +1338,51 @@ Set `[editor] mode = "vi"` to enable.
 |-----|--------|
 | `h` / `l` | Move left / right |
 | `0` / `$` | Move to start / end of line |
-| `w` / `b` | Move word forward / backward |
+| `w` / `W` | Move to next word / WORD |
+| `b` / `B` | Move to previous word / WORD |
+| `f{char}` / `F{char}` | Find char forward / backward on line |
+| `t{char}` / `T{char}` | Till char forward / backward (before char) |
 | `i` / `a` | Insert before / after cursor |
 | `I` / `A` | Insert at start / end of line |
 | `o` / `O` | Open line below / above |
 | `x` | Delete character at cursor |
 | `D` | Kill to end of line |
+| `C` | Change to end of line |
 | `dd` | Kill entire line |
-| `p` | Paste from kill ring |
+| `cc` | Clear line (change entire line) |
+| `yy` | Yank entire line |
+| `p` / `P` | Paste after / before cursor |
 | `u` | Undo |
-| `r` | Redo |
-| `c` | Cancel (clear input, back to insert) |
+| `r` | Redo (Ctrl+R) |
 | `v` | Enter visual mode |
-| `Esc` | Return to insert mode |
+| `.` | Repeat last change |
+| `J` | Join current line with next |
+| `~` | Toggle case of character under cursor |
+| `gg` / `G` | Go to start / end of input |
+| `/pattern` | Search history forward for pattern |
+| `?pattern` | Search history backward for pattern |
+| `n` / `N` | Repeat search same / opposite direction |
+| `Esc` | Return to insert mode (move cursor left 1) |
+
+**Vi Visual Mode** — Press `v` from normal mode:
+
+| Key | Action |
+|-----|--------|
+| `d` | Delete selection |
+| `y` | Yank (copy) selection |
+| `u` | Lowercase selection |
+| `U` | Uppercase selection |
+| `v` | Return to normal mode |
+
+### Tab Completion
+
+Pressing Tab triggers context-aware completion:
+
+- **Command position** (start of line or after pipe/semicolon): completes command names (builtins + PATH executables) and file paths simultaneously
+- **Argument position**: completes file paths (directories get trailing `/`)
+- **Custom completions**: `complete -F func cmd` registers a function; `complete -C /path/cmd cmd` runs an external command
+
+Single match: inserted directly. Multiple matches: longest common prefix inserted, bell rings. No matches: bell rings.
 
 ### Kill Ring & Undo/Redo
 
@@ -1559,9 +1656,27 @@ Uses `sigaction()`.
 | `$?` | Last command exit status |
 | `$!` | PID of most recent background command |
 | `$0`–`$9` | Positional parameters |
-| `$@` | All positional parameters |
-| `$*` | All positional parameters |
+| `$@` | All positional parameters (individually quoted when `$*` context) |
+| `$*` | All positional parameters (single string with IFS first char) |
 | `$#` | Number of positional parameters |
+| `$-` | Current shell option flags |
+| `_` | Last argument of previous command |
+| `RANDOM` | Random integer 0–32767 |
+| `SECONDS` | Seconds since shell started. Assignable to reset timer. |
+| `LINENO` | Current line number in source file |
+| `BASH_VERSION` | Always `"0.70.0"` |
+| `BASH` | Always `"context"` |
+| `BASH_REMATCH` | Array of regex match groups from `[[ =~ ]]` |
+| `BASH_SOURCE` | Source file for current function/script |
+| `FUNCNAME` | Name of current function (via call stack) |
+| `BASH_ALIASES` | Associative array of defined aliases |
+| `BASH_CMDS` | Hash table of command lookup cache |
+| `PIPESTATUS` | Array of exit statuses from last pipeline |
+| `DIRSTACK` | Directory stack (indexed array, also `DIRSTACK_0`..`DIRSTACK_N`) |
+| `HISTCMD` | Current history number |
+| `COPROC_PID` | PID of last coprocess |
+| `COPROC` | Name of last coprocess |
+| `GROUPS` | Array of groups current user belongs to |
 
 ---
 </details>
@@ -2366,14 +2481,23 @@ Trap handlers stored in `Env.traps`.
 
 | Usage | Description |
 |-------|-------------|
-| `trap 'echo SIGINT received' SIGINT` | Register handler |
+| `trap 'echo SIGINT received' SIGINT` | Register signal handler |
+| `trap 'echo ERR' ERR` | Run on any command failure (exit code != 0) |
+| `trap 'echo DEBUG' DEBUG` | Run before each command is executed |
+| `trap 'echo RETURN' RETURN` | Run when a function or source returns |
 | `trap '' SIGINT` | Ignore signal |
 | `trap - SIGINT` | Reset to default |
 | `trap` | Print all active traps |
+| `trap -p SIGNAL` | Print handler for specific signal |
 
-Supported: `SIGINT`, `SIGTERM`, `SIGHUP`, `SIGTSTP`.
+Supported signals: `SIGINT`, `SIGTERM`, `SIGHUP`, `SIGTSTP`, `SIGUSR1`, `SIGUSR2`.
+Pseudo-signals: `ERR`, `DEBUG`, `RETURN`, `EXIT`.
 
 Signal arrives → `TRAP_SIGNAL` set → main loop checks flag → looks up handler → tokenizes, parses, executes → flag reset.
+
+`ERR` trap fires when a command returns non-zero (unless `set -e` causes immediate exit).
+`DEBUG` trap fires before each simple command.
+`RETURN` trap fires when a function or `source` completes.
 
 ---
 </details>
@@ -2384,6 +2508,20 @@ Signal arrives → `TRAP_SIGNAL` set → main loop checks flag → looks up hand
 
 - **`[Cudane]`** — The Distribution.
 - **`[MCX]`** — Package Manager.
+
+## Man Page
+
+A full man page is included at `ctx.1`. Install with:
+
+```sh
+install -Dm644 ctx.1 /usr/share/man/man1/ctx.1
+```
+
+Or view directly:
+
+```sh
+man ./ctx.1
+```
 
 ## License
 

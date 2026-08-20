@@ -10,6 +10,7 @@ pub enum RedirKind {
     OutputFdAppend,
     InputFd,
     RedirectFd,
+    RedirectOpen,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -17,6 +18,15 @@ pub enum CompoundKind {
     And,
     Or,
     Semicolon,
+    Background,
+}
+
+#[derive(Debug, Clone, PartialEq, Default)]
+pub enum CaseTerminator {
+    #[default]
+    DoubleSemi,
+    AmpSemi,
+    SemiAmp,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -68,7 +78,7 @@ pub enum Node {
     },
     Case {
         word: String,
-        arms: Vec<(Vec<String>, Box<Node>)>,
+        arms: Vec<(Vec<String>, Box<Node>, CaseTerminator)>,
     },
     Function {
         name: String,
@@ -88,6 +98,10 @@ pub enum Node {
     },
     TestDoubleBracket {
         tokens: Vec<String>,
+    },
+    Coproc {
+        name: Option<String>,
+        body: Box<Node>,
     },
     Empty,
 }

@@ -51,7 +51,7 @@ impl Parser {
         let mut left = self.parse_and_or();
         loop {
             match self.peek() {
-                Token::Semi | Token::Newline | Token::Amp => {
+                Token::Semi | Token::Newline => {
                     self.advance();
                     self.skip_newlines();
                     let right = self.parse_and_or();
@@ -60,6 +60,19 @@ impl Parser {
                     }
                     left = Node::Compound {
                         kind: CompoundKind::Semicolon,
+                        left: Box::new(left),
+                        right: Box::new(right),
+                    };
+                }
+                Token::Amp => {
+                    self.advance();
+                    self.skip_newlines();
+                    let right = self.parse_and_or();
+                    if right.is_empty() {
+                        return left;
+                    }
+                    left = Node::Compound {
+                        kind: CompoundKind::Background,
                         left: Box::new(left),
                         right: Box::new(right),
                     };
@@ -133,6 +146,7 @@ impl Parser {
             Token::Case => self.parse_case(),
             Token::Function => self.parse_function_def(),
             Token::Select => self.parse_select(),
+            Token::Coproc => self.parse_coproc(),
             Token::Word(_) => {
                 if self.lookahead_is_func_def() {
                     self.parse_function_def_posix()
@@ -185,7 +199,11 @@ impl Parser {
         self.skip_newlines();
         if matches!(self.peek(), Token::Semi) { self.advance(); }
         self.skip_newlines();
-        if matches!(self.peek(), Token::Do) { self.advance(); }
+        if !matches!(self.peek(), Token::Do) {
+            eprintln!("context: syntax error: expected `do` after condition");
+            return Node::Empty;
+        }
+        self.advance();
         self.skip_newlines();
 
         let mut body_cmds = Vec::new();
@@ -195,7 +213,11 @@ impl Parser {
             body_cmds.push(self.parse_and_or());
             if matches!(self.peek(), Token::Semi) { self.advance(); }
         }
-        if matches!(self.peek(), Token::Done) { self.advance(); }
+        if matches!(self.peek(), Token::Done) {
+            self.advance();
+        } else if matches!(self.peek(), Token::Eof) {
+            eprintln!("context: syntax error: unexpected end of input, expected `done`");
+        }
 
         let body = if body_cmds.len() == 1 {
             body_cmds.remove(0)
@@ -269,6 +291,37 @@ impl Parser {
         }
     }
 
+    fn collect_balanced_parens(&mut self) -> String {
+        let mut depth = 1u32;
+        let mut parts = Vec::new();
+        parts.push("(".to_string());
+        while depth > 0 {
+            match self.peek() {
+                Token::LParen => {
+                    depth += 1;
+                    parts.push(self.advance().to_string());
+                }
+                Token::RParen => {
+                    depth -= 1;
+                    if depth == 0 {
+                        self.advance();
+                        parts.push(")".to_string());
+                    } else {
+                        parts.push(self.advance().to_string());
+                    }
+                }
+                Token::Eof => break,
+                _ => {
+                    let s = self.advance().to_string();
+                    if !s.is_empty() {
+                        parts.push(s);
+                    }
+                }
+            }
+        }
+        parts.join(" ")
+    }
+
     fn parse_simple_command(&mut self) -> Node {
         let mut words = Vec::new();
         let mut redirects = Vec::new();
@@ -285,7 +338,8 @@ impl Parser {
                                 Token::Greater | Token::DoubleGreater | Token::Less
                                 | Token::LessLess | Token::LessLessLess | Token::LessAmp
                                 | Token::AmpGreater | Token::AmpGreaterGreater
-                                | Token::GreaterPipe | Token::GreaterAmp)
+                                | Token::GreaterPipe | Token::GreaterAmp
+                                | Token::LessGreater)
                                 && let Some(r) = self.parse_redirect_with_fd(Some(fd_num)) {
                                     redirects.push(r);
                                     continue;
@@ -299,10 +353,16 @@ impl Parser {
                 Token::Greater | Token::DoubleGreater | Token::Less | Token::LessLess
                 | Token::LessLessLess | Token::LessAmp
                 | Token::AmpGreater | Token::AmpGreaterGreater | Token::GreaterPipe
-                | Token::GreaterAmp => {
+                | Token::GreaterAmp | Token::LessGreater => {
                     if let Some(r) = self.parse_redirect() {
                         redirects.push(r);
                     }
+                }
+                Token::LessLParen | Token::GreaterLParen => {
+                    let prefix = if matches!(self.peek(), Token::LessLParen) { "<" } else { ">" };
+                    self.advance();
+                    let inner = self.collect_balanced_parens();
+                    words.push(format!("{}{}", prefix, inner));
                 }
                 Token::Amp => {
                     self.advance();
@@ -369,9 +429,9 @@ impl Parser {
             Token::Less => { self.advance(); RedirKind::Input }
             Token::LessLess => {
                 self.advance();
+                let delimiter_quoted = matches!(self.peek(), Token::SingleQuoted(_) | Token::DoubleQuoted(_));
                 let raw_delimiter = self.expect_word().unwrap_or_default();
-                let delimiter_quoted = raw_delimiter.contains('\x01') || raw_delimiter.contains('\x02');
-                let delimiter = raw_delimiter.replace(['\x01', '\x02'], "");
+                let delimiter = raw_delimiter;
 
                 self.skip_newlines();
                 let mut body_lines = Vec::new();
@@ -380,6 +440,7 @@ impl Parser {
                         Token::Eof => break,
                         Token::Newline => {
                             self.advance();
+                            body_lines.push(String::new());
                             continue;
                         }
                         _ => {
@@ -400,9 +461,9 @@ impl Parser {
             Token::GreaterAmp => { self.advance(); RedirKind::RedirectFd }
             Token::LessLessDash => {
                 self.advance();
+                let delimiter_quoted = matches!(self.peek(), Token::SingleQuoted(_) | Token::DoubleQuoted(_));
                 let raw_delimiter = self.expect_word().unwrap_or_default();
-                let delimiter_quoted = raw_delimiter.contains('\x01') || raw_delimiter.contains('\x02');
-                let delimiter = raw_delimiter.replace(['\x01', '\x02'], "");
+                let delimiter = raw_delimiter;
 
                 self.skip_newlines();
                 let mut body_lines = Vec::new();
@@ -411,6 +472,7 @@ impl Parser {
                         Token::Eof => break,
                         Token::Newline => {
                             self.advance();
+                            body_lines.push(String::new());
                             continue;
                         }
                         _ => {
@@ -434,12 +496,19 @@ impl Parser {
             Token::LessLessLess => {
                 self.advance();
                 let word = self.expect_word().unwrap_or_default();
-                RedirKind::HereString(word)
+                let rest = self.collect_line_until_newline();
+                let content = if rest.is_empty() { word } else { format!("{} {}", word, rest) };
+                RedirKind::HereString(content)
             }
             Token::LessAmp => { self.advance(); RedirKind::InputFd }
+            Token::LessGreater => { self.advance(); RedirKind::RedirectOpen }
             _ => return None,
         };
-        let target = self.expect_word().unwrap_or_default();
+        let target = if matches!(kind, RedirKind::HereDocBody(..) | RedirKind::HereString(..)) {
+            String::new()
+        } else {
+            self.expect_word().unwrap_or_default()
+        };
         Some(Redirect { fd, kind, target })
     }
 
@@ -469,6 +538,8 @@ impl Parser {
         let body = self.parse();
         if matches!(self.peek(), Token::RParen) {
             self.advance();
+        } else if matches!(self.peek(), Token::Eof) {
+            eprintln!("context: syntax error: unexpected end of input, expected `)`");
         }
         Node::Subshell { body: Box::new(body) }
     }
@@ -480,6 +551,8 @@ impl Parser {
         self.skip_newlines();
         if matches!(self.peek(), Token::RBrace) {
             self.advance();
+        } else if matches!(self.peek(), Token::Eof) {
+            eprintln!("context: syntax error: unexpected end of input, expected `}}`");
         }
         Node::BraceGroup { body: Box::new(body) }
     }
@@ -488,7 +561,11 @@ impl Parser {
         self.advance();
         let condition = Box::new(self.parse());
         self.skip_newlines();
-        if matches!(self.peek(), Token::Then) { self.advance(); }
+        if !matches!(self.peek(), Token::Then) {
+            eprintln!("context: syntax error: expected `then` after condition");
+            return Node::Empty;
+        }
+        self.advance();
         self.skip_newlines();
         let then_body = Box::new(self.parse());
         let mut elif = Vec::new();
@@ -500,7 +577,11 @@ impl Parser {
                     self.advance();
                     let cond = Box::new(self.parse());
                     self.skip_newlines();
-                    if matches!(self.peek(), Token::Then) { self.advance(); }
+                    if !matches!(self.peek(), Token::Then) {
+                        eprintln!("context: syntax error: expected `then` after condition");
+                        return Node::Empty;
+                    }
+                    self.advance();
                     self.skip_newlines();
                     let body = Box::new(self.parse());
                     elif.push((cond, body));
@@ -514,6 +595,10 @@ impl Parser {
                     self.advance();
                     break;
                 }
+                Token::Eof => {
+                    eprintln!("context: syntax error: unexpected end of input, expected `fi`");
+                    break;
+                }
                 _ => break,
             }
         }
@@ -524,11 +609,19 @@ impl Parser {
         self.advance();
         let condition = Box::new(self.parse());
         self.skip_newlines();
-        if matches!(self.peek(), Token::Do) { self.advance(); }
+        if !matches!(self.peek(), Token::Do) {
+            eprintln!("context: syntax error: expected `do` after condition");
+            return Node::Empty;
+        }
+        self.advance();
         self.skip_newlines();
         let body = Box::new(self.parse());
         self.skip_newlines();
-        if matches!(self.peek(), Token::Done) { self.advance(); }
+        if matches!(self.peek(), Token::Done) {
+            self.advance();
+        } else if matches!(self.peek(), Token::Eof) {
+            eprintln!("context: syntax error: unexpected end of input, expected `done`");
+        }
         Node::While { condition, body }
     }
 
@@ -536,11 +629,19 @@ impl Parser {
         self.advance();
         let condition = Box::new(self.parse());
         self.skip_newlines();
-        if matches!(self.peek(), Token::Do) { self.advance(); }
+        if !matches!(self.peek(), Token::Do) {
+            eprintln!("context: syntax error: expected `do` after condition");
+            return Node::Empty;
+        }
+        self.advance();
         self.skip_newlines();
         let body = Box::new(self.parse());
         self.skip_newlines();
-        if matches!(self.peek(), Token::Done) { self.advance(); }
+        if matches!(self.peek(), Token::Done) {
+            self.advance();
+        } else if matches!(self.peek(), Token::Eof) {
+            eprintln!("context: syntax error: unexpected end of input, expected `done`");
+        }
         Node::Until { condition, body }
     }
 
@@ -563,7 +664,11 @@ impl Parser {
         self.skip_newlines();
         if matches!(self.peek(), Token::Semi) { self.advance(); }
         self.skip_newlines();
-        if matches!(self.peek(), Token::Do) { self.advance(); }
+        if !matches!(self.peek(), Token::Do) {
+            eprintln!("context: syntax error: expected `do` after condition");
+            return Node::Empty;
+        }
+        self.advance();
         self.skip_newlines();
 
         let mut body_cmds = Vec::new();
@@ -577,7 +682,11 @@ impl Parser {
                 self.advance();
             }
         }
-        if matches!(self.peek(), Token::Done) { self.advance(); }
+        if matches!(self.peek(), Token::Done) {
+            self.advance();
+        } else if matches!(self.peek(), Token::Eof) {
+            eprintln!("context: syntax error: unexpected end of input, expected `done`");
+        }
 
         let body = if body_cmds.len() == 1 {
             body_cmds.remove(0)
@@ -633,7 +742,11 @@ impl Parser {
         self.skip_newlines();
         if matches!(self.peek(), Token::Semi) { self.advance(); }
         self.skip_newlines();
-        if matches!(self.peek(), Token::Do) { self.advance(); }
+        if !matches!(self.peek(), Token::Do) {
+            eprintln!("context: syntax error: expected `do` after condition");
+            return Node::Empty;
+        }
+        self.advance();
         self.skip_newlines();
 
         let mut body_cmds = Vec::new();
@@ -647,7 +760,11 @@ impl Parser {
                 self.advance();
             }
         }
-        if matches!(self.peek(), Token::Done) { self.advance(); }
+        if matches!(self.peek(), Token::Done) {
+            self.advance();
+        } else if matches!(self.peek(), Token::Eof) {
+            eprintln!("context: syntax error: unexpected end of input, expected `done`");
+        }
 
         let body = if body_cmds.len() == 1 {
             body_cmds.remove(0)
@@ -680,6 +797,10 @@ impl Parser {
                 self.advance();
                 break;
             }
+            if matches!(self.peek(), Token::Eof) {
+                eprintln!("context: syntax error: unexpected end of input, expected `esac`");
+                break;
+            }
             let mut patterns = Vec::new();
             loop {
                 if let Some(p) = self.expect_word() {
@@ -698,7 +819,7 @@ impl Parser {
             let mut body_cmds = Vec::new();
             loop {
                 self.skip_newlines();
-                if matches!(self.peek(), Token::DoubleSemi | Token::Esac | Token::Eof) {
+                if matches!(self.peek(), Token::DoubleSemi | Token::SemiAmp | Token::SemiSemiAmp | Token::Esac | Token::Eof) {
                     break;
                 }
                 body_cmds.push(self.parse_and_or());
@@ -706,8 +827,12 @@ impl Parser {
                     self.advance();
                 }
             }
-            if matches!(self.peek(), Token::DoubleSemi) {
-                self.advance();
+            let mut terminator = CaseTerminator::DoubleSemi;
+            match self.peek() {
+                Token::DoubleSemi => { self.advance(); terminator = CaseTerminator::DoubleSemi; }
+                Token::SemiAmp => { self.advance(); terminator = CaseTerminator::AmpSemi; }
+                Token::SemiSemiAmp => { self.advance(); terminator = CaseTerminator::SemiAmp; }
+                _ => {}
             }
             let body = if body_cmds.len() == 1 {
                 body_cmds.remove(0)
@@ -724,7 +849,7 @@ impl Parser {
                 }
                 left
             };
-            arms.push((patterns, Box::new(body)));
+            arms.push((patterns, Box::new(body), terminator));
         }
         Node::Case { word, arms }
     }
@@ -756,6 +881,27 @@ impl Parser {
         }
         expr.truncate(expr.trim_end().len());
         Node::Arithmetic { expr }
+    }
+
+    fn parse_coproc(&mut self) -> Node {
+        self.advance();
+        let name = if let Token::Word(_) = self.peek() {
+            if let Some(w) = self.expect_word() {
+                match w.as_str() {
+                    "if" | "while" | "until" | "for" | "case" | "function" | "select" => {
+                        self.pos -= 1;
+                        None
+                    }
+                    _ => Some(w),
+                }
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+        let body = Box::new(self.parse_command());
+        Node::Coproc { name, body }
     }
 }
 
@@ -999,6 +1145,298 @@ mod tests {
                 assert!(bang);
             }
             _ => panic!("expected Pipeline with bang"),
+        }
+    }
+
+    #[test]
+    fn test_coproc_with_name() {
+        let ast = parse(tokenize("coproc name { cmd; }"));
+        match ast {
+            Node::Coproc { name, body } => {
+                assert_eq!(name.as_deref(), Some("name"));
+                assert!(matches!(*body, Node::BraceGroup { .. }));
+            }
+            _ => panic!("expected Coproc"),
+        }
+    }
+
+    #[test]
+    fn test_coproc_without_name() {
+        let ast = parse(tokenize("coproc { cmd; }"));
+        match ast {
+            Node::Coproc { name, body } => {
+                assert!(name.is_none());
+                assert!(matches!(*body, Node::BraceGroup { .. }));
+            }
+            _ => panic!("expected Coproc without name"),
+        }
+    }
+
+    #[test]
+    fn test_case_with_dollar_var() {
+        let ast = parse(tokenize("case $x in pattern) echo hi ;; esac"));
+        match ast {
+            Node::Case { word, arms } => {
+                assert_eq!(word, "$x");
+                assert_eq!(arms.len(), 1);
+                let patterns = &arms[0].0;
+                assert_eq!(patterns, &vec!["pattern"]);
+            }
+            _ => panic!("expected Case"),
+        }
+    }
+
+    #[test]
+    fn test_for_cstyle() {
+        let ast = parse(tokenize("for ((i=0; i<10; i++)) do echo $i; done"));
+        match ast {
+            Node::ForArith { init, cond, incr, .. } => {
+                assert!(init.is_some());
+                assert!(cond.is_some());
+                assert!(incr.is_some());
+            }
+            _ => panic!("expected ForArith"),
+        }
+    }
+
+    #[test]
+    fn test_heredoc_quoted_delimiter() {
+        let ast = parse(tokenize("cat <<'EOF'\nhello $USER\nEOF"));
+        match ast {
+            Node::Command { redirects, .. } => {
+                assert_eq!(redirects.len(), 1);
+                match &redirects[0].kind {
+                    RedirKind::HereDocBody(body, expand) => {
+                        assert_eq!(body, "hello $USER");
+                        assert!(!expand);
+                    }
+                    _ => panic!("expected HereDocBody"),
+                }
+            }
+            _ => panic!("expected Command with heredoc"),
+        }
+    }
+
+    #[test]
+    fn test_redirect_stderr_to_stdout() {
+        let ast = parse(tokenize("cmd 2>&1"));
+        match ast {
+            Node::Command { redirects, words, .. } => {
+                assert!(words.contains(&"cmd".to_string()));
+                assert_eq!(redirects.len(), 1);
+                assert_eq!(redirects[0].fd, Some(2));
+                assert_eq!(redirects[0].kind, RedirKind::RedirectFd);
+                assert_eq!(redirects[0].target, "1");
+            }
+            _ => panic!("expected Command with fd redirect"),
+        }
+    }
+
+    #[test]
+    fn test_three_stage_pipeline() {
+        let ast = parse(tokenize("cmd1 | cmd2 | cmd3"));
+        match ast {
+            Node::Pipeline { commands, .. } => {
+                assert_eq!(commands.len(), 3);
+                for cmd in &commands {
+                    assert!(matches!(cmd, Node::Command { .. }));
+                }
+            }
+            _ => panic!("expected Pipeline with 3 commands"),
+        }
+    }
+
+    #[test]
+    fn test_background_command() {
+        let ast = parse(tokenize("cmd &"));
+        match ast {
+            Node::Command { background, words, .. } => {
+                assert!(background);
+                assert_eq!(words, vec!["cmd"]);
+            }
+            _ => panic!("expected background Command"),
+        }
+    }
+
+    #[test]
+    fn test_complex_cmd_sub() {
+        let ast = parse(tokenize("echo $(cmd1; cmd2)"));
+        match ast {
+            Node::Command { words, .. } => {
+                assert_eq!(words.len(), 2);
+                assert!(words[1].starts_with("$("));
+            }
+            _ => panic!("expected Command"),
+        }
+    }
+
+    #[test]
+    fn test_case_with_multiple_patterns() {
+        let ast = parse(tokenize("case $x in a|b) echo AB ;; c) echo C ;; esac"));
+        match ast {
+            Node::Case { arms, .. } => {
+                assert_eq!(arms.len(), 2);
+                assert_eq!(arms[0].0, vec!["a", "b"]);
+                assert_eq!(arms[1].0, vec!["c"]);
+            }
+            _ => panic!("expected Case with multiple patterns"),
+        }
+    }
+
+    #[test]
+    fn test_redirect_here_string() {
+        let ast = parse(tokenize("cat <<< hello"));
+        match ast {
+            Node::Command { redirects, .. } => {
+                assert_eq!(redirects.len(), 1);
+                match &redirects[0].kind {
+                    RedirKind::HereString(content) => {
+                        assert_eq!(content, "hello");
+                    }
+                    _ => panic!("expected HereString"),
+                }
+            }
+            _ => panic!("expected Command with here string"),
+        }
+    }
+
+    #[test]
+    fn test_redirect_clobber() {
+        let ast = parse(tokenize("echo x >| file"));
+        match ast {
+            Node::Command { redirects, .. } => {
+                assert_eq!(redirects.len(), 1);
+                assert_eq!(redirects[0].kind, RedirKind::Clobber);
+            }
+            _ => panic!("expected Command with clobber redirect"),
+        }
+    }
+
+    #[test]
+    fn test_nested_arith_in_cmd_sub() {
+        let ast = parse(tokenize("echo $((2+3))"));
+        match ast {
+            Node::Command { words, .. } => {
+                assert_eq!(words.len(), 2);
+                assert!(words[1].contains("$("));
+            }
+            _ => panic!("expected Command with arithmetic"),
+        }
+    }
+
+    #[test]
+    fn test_posix_func_def() {
+        let ast = parse(tokenize("myfunc() { echo hi; }"));
+        match ast {
+            Node::Function { name, .. } => {
+                assert_eq!(name, "myfunc");
+            }
+            _ => panic!("expected Function"),
+        }
+    }
+
+    #[test]
+    fn test_double_amp_background() {
+        let ast = parse(tokenize("echo a && echo b &"));
+        assert!(matches!(ast, Node::Compound { kind: CompoundKind::And, .. }));
+    }
+
+    #[test]
+    fn test_nested_if_in_for() {
+        let ast = parse(tokenize("for i in 1 2; do if true; then echo $i; fi; done"));
+        match ast {
+            Node::For { var, body, .. } => {
+                assert_eq!(var, "i");
+                assert!(matches!(*body, Node::If { .. }));
+            }
+            _ => panic!("expected For with If body"),
+        }
+    }
+
+    #[test]
+    fn test_case_with_glob_pattern() {
+        let ast = parse(tokenize("case $x in *.txt) echo text ;; *) echo other ;; esac"));
+        match ast {
+            Node::Case { arms, .. } => {
+                assert_eq!(arms.len(), 2);
+                assert_eq!(arms[0].0, vec!["*.txt"]);
+                assert_eq!(arms[1].0, vec!["*"]);
+            }
+            _ => panic!("expected Case with glob patterns"),
+        }
+    }
+
+    #[test]
+    fn test_compound_nested_parens() {
+        let ast = parse(tokenize("(echo a; echo b)"));
+        match ast {
+            Node::Subshell { body } => {
+                assert!(matches!(*body, Node::Compound { kind: CompoundKind::Semicolon, .. }));
+            }
+            _ => panic!("expected Subshell"),
+        }
+    }
+
+    #[test]
+    fn test_redirect_multiple() {
+        let ast = parse(tokenize("echo x > /tmp/a.txt 2> /tmp/b.txt"));
+        match ast {
+            Node::Command { redirects, .. } => {
+                assert_eq!(redirects.len(), 2);
+            }
+            _ => panic!("expected Command with 2 redirects"),
+        }
+    }
+
+    #[test]
+    fn test_while_with_pipe_body() {
+        let ast = parse(tokenize("while read line; do echo $line; done < input.txt"));
+        match ast {
+            Node::While { .. } => {}
+            _ => panic!("expected While"),
+        }
+    }
+
+    #[test]
+    fn test_for_empty_values() {
+        let ast = parse(tokenize("for i in; do echo $i; done"));
+        match ast {
+            Node::For { var, values, .. } => {
+                assert_eq!(var, "i");
+                assert!(values.is_empty());
+            }
+            _ => panic!("expected For with empty values"),
+        }
+    }
+
+    #[test]
+    fn test_case_with_semicolons() {
+        let ast = parse(tokenize("case x in a) ;; b) ;; esac"));
+        match ast {
+            Node::Case { arms, .. } => {
+                assert_eq!(arms.len(), 2);
+            }
+            _ => panic!("expected Case"),
+        }
+    }
+
+    #[test]
+    fn test_and_or_chain() {
+        let ast = parse(tokenize("cmd1 && cmd2 || cmd3"));
+        match ast {
+            Node::Compound { kind: CompoundKind::Or, .. } => {}
+            _ => panic!("expected Or compound"),
+        }
+    }
+
+    #[test]
+    fn test_function_with_body() {
+        let ast = parse(tokenize("myfunc() { echo hi; echo bye; }"));
+        match ast {
+            Node::Function { name, .. } => {
+                assert_eq!(name, "myfunc");
+            }
+            _ => panic!("expected Function"),
         }
     }
 }

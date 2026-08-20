@@ -1,4 +1,7 @@
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicU64, Ordering};
+
+static SHELL_START_TIME: AtomicU64 = AtomicU64::new(0);
 
 const INTERNAL_PREFIXES: &[&str] = &[
     "_SHOPT_", "_GETOPT_", "_OPT_", "_LOADED_MODULE",
@@ -6,6 +9,29 @@ const INTERNAL_PREFIXES: &[&str] = &[
 
 fn is_internal(key: &str) -> bool {
     INTERNAL_PREFIXES.iter().any(|p| key.starts_with(p))
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct VarAttrs {
+    pub readonly: bool,
+    pub exported: bool,
+    pub integer: bool,
+    pub lowercase: bool,
+    pub uppercase: bool,
+    pub nameref: Option<String>,
+    pub trace: bool,
+}
+
+fn is_valid_var_name(name: &str) -> bool {
+    let bytes = name.as_bytes();
+    if bytes.is_empty() {
+        return false;
+    }
+    match bytes[0] {
+        b'a'..=b'z' | b'A'..=b'Z' | b'_' => {}
+        _ => return false,
+    }
+    bytes[1..].iter().all(|b| matches!(b, b'a'..=b'z' | b'A'..=b'Z' | b'0'..=b'9' | b'_'))
 }
 
 #[derive(Debug, Clone)]
@@ -19,6 +45,7 @@ pub struct Env {
     assoc_arrays: HashMap<String, HashMap<String, String>>,
     positional: Vec<String>,
     scope_stack: Vec<HashMap<String, String>>,
+    attrs: HashMap<String, VarAttrs>,
 }
 
 impl Env {
@@ -34,6 +61,15 @@ impl Env {
             .unwrap_or(0) + 1;
         vars.insert("SHLVL".to_string(), shlvl.to_string());
         unsafe { std::env::set_var("SHLVL", shlvl.to_string()); }
+        if !vars.contains_key("SHELL") {
+            vars.insert("SHELL".to_string(), "context".to_string());
+        }
+        let start = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+        SHELL_START_TIME.compare_exchange(0, start, Ordering::SeqCst, Ordering::SeqCst).ok();
+        unsafe { libc::srand(start as u32); }
         Self {
             vars,
             exported,
@@ -44,12 +80,17 @@ impl Env {
             assoc_arrays: HashMap::new(),
             positional: Vec::new(),
             scope_stack: Vec::new(),
+            attrs: HashMap::new(),
         }
     }
 
     pub fn get(&self, key: &str) -> Option<&str> {
+        if let Some(attrs) = self.attrs.get(key)
+            && let Some(ref target) = attrs.nameref {
+                return self.get(target);
+            }
         match key {
-            "SHELL" => Some("context"),
+            "SHELL" => Some(self.vars.get("SHELL").map(|s| s.as_str()).unwrap_or("context")),
             _ => {
 
                 for scope in self.scope_stack.iter().rev() {
@@ -62,13 +103,70 @@ impl Env {
         }
     }
 
-    pub fn set(&mut self, key: &str, value: &str) {
-        if self.is_readonly(key) {
-            return;
+    pub fn set(&mut self, key: &str, value: &str) -> bool {
+        if let Some(target) = self.attrs.get(key).and_then(|a| a.nameref.clone()) {
+            return self.set(&target, value);
         }
-        self.vars.insert(key.to_string(), value.to_string());
+        let effective_value;
+        let value = if let Some(attrs) = self.attrs.get(key) {
+            if attrs.lowercase {
+                effective_value = value.to_lowercase();
+                &effective_value
+            } else if attrs.uppercase {
+                effective_value = value.to_uppercase();
+                &effective_value
+            } else {
+                value
+            }
+        } else {
+            value
+        };
+        if self.is_readonly(key) {
+            eprintln!("context: {}: readonly variable", key);
+            return false;
+        }
+        if !is_valid_var_name(key) {
+            return false;
+        }
+        if key == "SECONDS" {
+            let now = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs();
+            let val: u64 = value.parse().unwrap_or(0);
+            self.vars.insert("_SECONDS_RESET".to_string(), (now.saturating_sub(val)).to_string());
+        }
+        if let Some(scope) = self.scope_stack.last_mut() {
+            scope.insert(key.to_string(), value.to_string());
+        } else {
+            self.vars.insert(key.to_string(), value.to_string());
+        }
         if !is_internal(key) {
             unsafe { std::env::set_var(key, value); }
+        }
+        true
+    }
+
+    pub fn set_dirstack(&mut self, stack: &[String]) {
+        self.set("DIRSTACK", &stack.join("\n"));
+        let count = stack.len();
+        for (i, dir) in stack.iter().enumerate() {
+            let mut key = String::with_capacity(12);
+            key.push_str("DIRSTACK_");
+            key.push_str(&i.to_string());
+            self.set(&key, dir);
+        }
+        let mut i = count;
+        loop {
+            let mut key = String::with_capacity(12);
+            key.push_str("DIRSTACK_");
+            key.push_str(&i.to_string());
+            if self.vars.remove(&key).is_some() {
+                unsafe { std::env::remove_var(&key); }
+            } else {
+                break;
+            }
+            i += 1;
         }
     }
 
@@ -88,6 +186,13 @@ impl Env {
             }
     }
 
+    pub fn unexport(&mut self, key: &str) {
+        self.exported.insert(key.to_string(), false);
+        if !is_internal(key) {
+            unsafe { std::env::remove_var(key); }
+        }
+    }
+
     pub fn is_exported(&self, key: &str) -> bool {
         self.exported.get(key).copied().unwrap_or(false)
     }
@@ -96,6 +201,9 @@ impl Env {
         if self.is_readonly(key) {
             eprintln!("context: unset: {}: readonly variable", key);
             return;
+        }
+        for scope in &mut self.scope_stack {
+            scope.remove(key);
         }
         self.vars.remove(key);
         self.exported.remove(key);
@@ -109,7 +217,7 @@ impl Env {
     }
 
     pub fn is_readonly(&self, key: &str) -> bool {
-        self.readonly.get(key).copied().unwrap_or(false)
+        self.readonly.contains_key(key)
     }
 
     pub fn expand_special(&mut self, var: &str) -> String {
@@ -137,6 +245,68 @@ impl Env {
             "USER" => self.get("USER").unwrap_or("user").to_string(),
             "HOSTNAME" => self.get_hostname(),
             "SHLVL" => self.vars.get("SHLVL").cloned().unwrap_or_else(|| "1".into()),
+            "RANDOM" => unsafe { libc::rand() % 32768 }.to_string(),
+            "LINENO" => crate::shell::expand::CURRENT_LINE.load(Ordering::Relaxed).to_string(),
+            "SECONDS" => {
+                if self.vars.contains_key("_SECONDS_RESET") {
+                    let now = std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .unwrap_or_default()
+                        .as_secs();
+                    let reset = self.vars.get("_SECONDS_RESET")
+                        .and_then(|s| s.parse::<u64>().ok())
+                        .unwrap_or(0);
+                    (now.saturating_sub(reset)).to_string()
+                } else if let Some(val) = self.vars.get("SECONDS") {
+                    val.clone()
+                } else {
+                    let now = std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .unwrap_or_default()
+                        .as_secs();
+                    let start = SHELL_START_TIME.load(Ordering::SeqCst);
+                    (now.saturating_sub(start)).to_string()
+                }
+            }
+            "PIPESTATUS" => self.get("PIPESTATUS").unwrap_or("0").to_string(),
+            "FUNCNAME" => {
+                let stack = crate::shell::builtin::CALL_STACK.lock().unwrap();
+                stack.last().map(|f| f.name.clone()).unwrap_or_default()
+            }
+            "BASH_VERSION" => "0.70.0".to_string(),
+            "HISTCMD" => self.get("HISTCMD").unwrap_or("0").to_string(),
+            "BASH_SOURCE" => {
+                let stack = crate::shell::executor::SOURCE_STACK.lock().unwrap();
+                stack.last().cloned().unwrap_or_default()
+            }
+            "COPROC_PID" => self.get("COPROC_PID").unwrap_or("0").to_string(),
+            "COPROC" => self.get("COPROC").unwrap_or("").to_string(),
+            "BASH_ALIASES" => {
+                let pairs: Vec<String> = self.aliases.iter()
+                    .map(|(k, v)| format!("{}={}", k, v))
+                    .collect();
+                pairs.join(" ")
+            }
+            "BASH_CMDS" => {
+                let cache = crate::shell::builtin::PATH_CACHE.lock().unwrap();
+                let pairs: Vec<String> = cache.iter()
+                    .map(|(k, v)| format!("{}={}", k, v))
+                    .collect();
+                pairs.join(" ")
+            }
+            var if var.starts_with("BASH_REMATCH[") => {
+                let idx_str = var.trim_start_matches("BASH_REMATCH[").trim_end_matches(']');
+                let rematch = crate::shell::executor::BASH_REMATCH.lock().unwrap();
+                if idx_str == "@" {
+                    rematch.join(" ")
+                } else if idx_str == "#" {
+                    rematch.len().to_string()
+                } else if let Ok(idx) = idx_str.parse::<usize>() {
+                    rematch.get(idx).cloned().unwrap_or_default()
+                } else {
+                    String::new()
+                }
+            }
             _ => self.get(var).unwrap_or("").to_string(),
         }
     }
@@ -177,6 +347,9 @@ impl Env {
         }
         for (k, v) in &other.named_dirs {
             self.named_dirs.insert(k.clone(), v.clone());
+        }
+        for (k, v) in &other.attrs {
+            self.attrs.insert(k.clone(), v.clone());
         }
     }
 
@@ -314,13 +487,52 @@ impl Env {
         self.assoc_arrays.get(name).map(|m| m.len()).unwrap_or(0)
     }
 
+    pub fn is_indexed_array(&self, name: &str) -> bool {
+        let mut key = String::with_capacity(name.len() + 2);
+        key.push_str(name);
+        key.push_str("_0");
+        self.vars.contains_key(&key)
+    }
+
+    pub fn indexed_array_get(&self, name: &str, key: &str) -> Option<&str> {
+        self.vars.get(&format!("{}_{}", name, key)).map(|s| s.as_str())
+    }
+
+    pub fn indexed_array_set(&mut self, name: &str, key: &str, value: &str) {
+        self.set(&format!("{}_{}", name, key), value);
+    }
+
+    pub fn indexed_array_len(&self, name: &str) -> usize {
+        let mut count = 0;
+        let mut key = String::with_capacity(name.len() + 12);
+        let base_len = name.len() + 1;
+        loop {
+            key.truncate(base_len);
+            key.push_str(&count.to_string());
+            if self.vars.contains_key(&key) {
+                count += 1;
+            } else {
+                break;
+            }
+        }
+        count
+    }
+
+    pub fn indexed_array_unset(&mut self, name: &str, key: &str) {
+        self.unset(&format!("{}_{}", name, key));
+    }
+
     pub fn push_scope(&mut self) -> usize {
         self.scope_stack.push(HashMap::new());
         self.scope_stack.len()
     }
 
-    pub fn pop_scope(&mut self, _saved: usize) {
-        self.scope_stack.pop();
+    pub fn pop_scope(&mut self, saved: usize) {
+        if saved <= self.scope_stack.len() {
+            self.scope_stack.truncate(saved);
+        } else {
+            self.scope_stack.clear();
+        }
     }
 
     pub fn set_local(&mut self, key: &str, value: &str) {
@@ -329,6 +541,25 @@ impl Env {
         } else {
             self.vars.insert(key.to_string(), value.to_string());
         }
+    }
+
+    pub fn set_global(&mut self, key: &str, value: &str) {
+        if self.is_readonly(key) {
+            eprintln!("context: {}: readonly variable", key);
+            return;
+        }
+        self.vars.insert(key.to_string(), value.to_string());
+        if !is_internal(key) {
+            unsafe { std::env::set_var(key, value); }
+        }
+    }
+
+    pub fn get_var_attrs(&self, key: &str) -> VarAttrs {
+        self.attrs.get(key).cloned().unwrap_or_default()
+    }
+
+    pub fn set_var_attrs(&mut self, key: &str, new_attrs: VarAttrs) {
+        self.attrs.insert(key.to_string(), new_attrs);
     }
 
     pub fn clear_inherited(&mut self, keep_keys: &[String]) {
@@ -349,5 +580,90 @@ impl Env {
 impl Default for Env {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_nameref_follow_chain() {
+        let mut env = Env::new();
+        env.set("target", "hello");
+        env.set("ref1", "target");
+        env.set_var_attrs("ref1", VarAttrs { readonly: false, exported: false, integer: false, lowercase: false, uppercase: false, nameref: Some("target".into()), trace: false });
+        env.set("ref2", "ref1");
+        env.set_var_attrs("ref2", VarAttrs { readonly: false, exported: false, integer: false, lowercase: false, uppercase: false, nameref: Some("ref1".into()), trace: false });
+        assert_eq!(env.get("ref2"), Some("hello"));
+    }
+
+    #[test]
+    fn test_readonly_prevents_unset() {
+        let mut env = Env::new();
+        env.set("LOCKED", "value");
+        env.set_readonly("LOCKED");
+        env.unset("LOCKED");
+        assert_eq!(env.get("LOCKED"), Some("value"));
+    }
+
+    #[test]
+    fn test_export_and_is_exported() {
+        let mut env = Env::new();
+        env.set("MYVAR", "test");
+        assert!(!env.is_exported("MYVAR"));
+        env.export("MYVAR");
+        assert!(env.is_exported("MYVAR"));
+        env.unexport("MYVAR");
+        assert!(!env.is_exported("MYVAR"));
+    }
+
+    #[test]
+    fn test_positional_params() {
+        let mut env = Env::new();
+        env.set_positional(vec!["a".into(), "b".into(), "c".into()]);
+        assert_eq!(env.positional(), &["a", "b", "c"]);
+        assert_eq!(env.positional().len(), 3);
+    }
+
+    #[test]
+    fn test_alias_roundtrip() {
+        let mut env = Env::new();
+        env.set_alias("ll", "ls -la");
+        assert_eq!(env.get_alias("ll"), Some("ls -la"));
+        assert!(env.get_alias("nonexistent").is_none());
+        env.unset_alias("ll");
+        assert!(env.get_alias("ll").is_none());
+    }
+
+    #[test]
+    fn test_merge_from() {
+        let mut base = Env::new();
+        base.set("A", "1");
+        let mut overlay = Env::new();
+        overlay.set("B", "2");
+        overlay.set("A", "override");
+        base.merge_from(&overlay);
+        assert_eq!(base.get("A"), Some("override"));
+        assert_eq!(base.get("B"), Some("2"));
+    }
+
+    #[test]
+    fn test_dirstack() {
+        let mut env = Env::new();
+        env.set_dirstack(&["/tmp".into(), "/home".into(), "/var".into()]);
+        assert_eq!(env.get("DIRSTACK"), Some("/tmp\n/home\n/var"));
+        assert_eq!(env.get("DIRSTACK_0"), Some("/tmp"));
+        assert_eq!(env.get("DIRSTACK_2"), Some("/var"));
+    }
+
+    #[test]
+    fn test_set_var_with_attrs_prevents_overwrite() {
+        let mut env = Env::new();
+        env.set("A", "original");
+        env.set_readonly("A");
+        let result = env.set("A", "new_value");
+        assert!(!result);
+        assert_eq!(env.get("A"), Some("original"));
     }
 }

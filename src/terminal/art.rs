@@ -5,6 +5,10 @@ use crate::terminal::color::*;
 use super::prompt::{resolve_border_chars, expand_prompt_vars};
 
 fn expand_tilde(path: &str) -> String {
+    if path == "~"
+        && let Ok(home) = std::env::var("HOME") {
+            return home;
+        }
     if path.starts_with("~/")
         && let Ok(home) = std::env::var("HOME") {
             return format!("{}{}", home, &path[1..]);

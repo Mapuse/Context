@@ -1,131 +1,945 @@
-.\" Csh Shell — Man Page
-.TH Context 1 "2026-07-17" "context 0.70.0" "User Commands"
+.TH CTX 1 "Context" "General Commands Manual"
 .SH NAME
-context \- a fast, fully configurable POSIX shell written in Rust
+context \- Rust POSIX shell
 .SH SYNOPSIS
-.B context
+.B ctx
 .RI [ options ]
-.br
-.B context
-.B \-c
-.I command
+.RI [ command ]
 .SH DESCRIPTION
-.B context
-is a POSIX shell written entirely in Rust, featuring a custom line editor
-with syntax highlighting, true-color theming via TOML configuration,
-persistent command history, job control, and 30+ built-in commands.
+.B Context
+is a POSIX-compatible shell designed for high performance,
+extensibility, and deep customization. It aims to be a drop-in replacement for
+traditional shells while providing modern features, a rich builtin set, and
+first-class plugin support.
+.PP
+Context combines the speed and memory safety with a familiar
+command-line interface, making it suitable for interactive use, scripting, and
+embedded environments.
 .SH OPTIONS
+.SS Information
 .TP
-.B \-c \fIcommand\
-Execute the given command and exit.
+.BR \-h ", " \-\-help
+Display help information and exit.
 .TP
-.B \-h, \-\-help
-Show help message.
+.BR \-v ", " \-\-version
+Print version information and exit.
 .TP
-.B \-v, \-\-version
-Show version.
-.SH FEATURES
+.BR \-V ", " \-\-verbose
+Enable verbose output for diagnostics.
 .TP
-.B Syntax highlighting
-Real-time highlighting of variables ($VAR), operators (|, &&, ;),
-quoted strings, and command names in the input line.
+.BR \-l ", " \-\-license
+Display the software license and exit.
 .TP
-.B True color
-Any hex color (#RRGGBB) works via 24-bit ANSI escape sequences.
+.BR \-a ", " \-\-authors
+Show the list of authors and exit.
+.SS Command Execution
 .TP
-.B TOML configuration
-Full configuration at ~/.config/context/c.toml with 15 sections.
+.BR \-c ", " \-\-command\ \fIcommand\fR
+Execute
+.I command
+and exit.
 .TP
-.B Job control
-Background jobs (cmd &), jobs/fg/bg builtins.
+.BR \-s ", " \-\-stdin
+Read commands from standard input.
 .TP
-.B Command substitution
-$(cmd) and backtick `cmd` forms.
+.BR \-f ", " \-\-file\ \fIfile\fR
+Read commands from
+.I file
+and execute them.
 .TP
-.B Here documents and here strings
-<<EOF and <<<string redirections.
-.SH KEYBINDINGS
+.BR \-e ", " \-\-eval\ \fIcommand\fR
+Evaluate and execute
+.I command
+in the current shell context.
+.SS Environment
 .TP
-.B Ctrl+C
-Interrupt current process / cancel input line.
+.BR \-E ", " \-\-env\ \fIname=value\fR
+Set an environment variable.
 .TP
-.B Ctrl+D
-Exit shell (when input is empty).
+.BR \-U ", " \-\-unset\ \fIname\fR
+Unset an environment variable.
 .TP
-.B Ctrl+L
-Clear screen and redraw prompt.
+.BR \-C ", " \-\-chdir\ \fIdir\fR
+Change to
+.I dir
+before executing.
 .TP
-.B Ctrl+R
-Reverse incremental search through history.
+.BR \-W ", " \-\-workdir\ \fIdir\fR
+Set the initial working directory.
+.SS Shell Mode
 .TP
-.B Ctrl+A
-Move cursor to beginning of line.
+.BR \-p ", " \-\-posix
+Enable strict POSIX mode.
 .TP
-.B Ctrl+E
-Move cursor to end of line.
+.BR \-r ", " \-\-restricted
+Start in restricted shell mode.
 .TP
-.B Ctrl+K
-Kill from cursor to end of line.
+.BR \-i ", " \-\-interactive
+Force interactive shell mode.
 .TP
-.B Ctrl+U
-Kill from cursor to beginning of line.
+.BR \-b ", " \-\-bash
+Enable bash compatibility mode.
+.SS Startup
 .TP
-.B Ctrl+W
-Delete word before cursor.
+.BR \-n ", " \-\-norc
+Do not read any startup files.
 .TP
-.B Tab
-Command completion (PATH + current directory).
+.BR \-N ", " \-\-noprofile
+Do not read the profile file.
 .TP
-.B Up/Down
-Navigate command history.
-.SH BUILT-IN COMMANDS
-cd, exit, export, unset, alias, unalias, source, history, set, env,
-pwd, type, which, echo, printf, test, let, pushd, popd, dirs, readonly,
-declare, jobs, fg, bg, exec, true, false, builtin.
-.SH CONFIGURATION
-Configuration file: \fI~/.config/context/c.toml\
-.br
-Startup file: \fI~/.ctxrc\
-.br
-History file: \fI~/.ctx/.history\
-.SH CURSOR FORMAT
-The cursor is fully customizable via ~/.config/context/c.toml\.
-.PP
-Single character:
-.PP
-.RS 4
-[cursor]
-.br
-symbol = "_"
-.RE
-.PP
-Multi-line format (overrides symbol):
-.PP
-.RS 4
-[cursor]
-.br
-format = ["├── ", "│   ", "└── "]
-.br
-format_align = "left"
-.br
-format_colorize = true
-.RE
-.PP
-Each string in \fBformat\ is one line. The last line receives input.
-Any character or Unicode symbol works.
+.BR \-\-no\-startup
+Skip all startup file processing.
+.TP
+.BR \-\-no\-welcome
+Suppress the welcome message.
+.TP
+.BR \-\-no\-integrations
+Disable integration modules.
+.TP
+.BR \-\-no\-plugins
+Disable plugin loading.
+.TP
+.BR \-\-no\-python
+Disable Python integration.
+.TP
+.BR \-\-no\-dynamic
+Disable dynamic module loading.
+.TP
+.BR \-\-no\-ascii
+Disable ASCII art on startup.
+.TP
+.BR \-\-ascii
+Force ASCII art on startup.
+.TP
+.BR \-\-run\-command\ \fIcmd\fR
+Run a command after startup.
+.TP
+.BR \-H ", " \-\-startup\-delay\ \fIsecs\fR
+Delay startup by
+.I secs
+seconds.
+.SS Output and Debug
+.TP
+.BR \-q ", " \-\-quiet
+Suppress non-essential output.
+.TP
+.BR \-d ", " \-\-debug
+Enable debug output.
+.TP
+.BR \-t ", " \-\-trace
+Enable trace-level logging.
+.TP
+.BR \-x ", " \-\-xtrace
+Print commands and their expanded values as they are executed.
+.TP
+.BR \-g ", " \-\-log\-file\ \fIfile\fR
+Write log output to
+.IR file .
+.TP
+.BR \-\-no\-log
+Disable logging entirely.
+.TP
+.BR \-\-benchmark
+Run in benchmark mode and report timing.
+.SS Terminal
+.TP
+.BR \-M ", " \-\-no\-color
+Disable colored output.
+.TP
+.BR \-F ", " \-\-color
+Force colored output.
+.TP
+.BR \-R ", " \-\-color\-mode\ \fImode\fR
+Set color mode (
+.IR auto ,
+.IR always ,
+.IR never ).
+.TP
+.BR \-u ", " \-\-utf8
+Enable UTF-8 mode.
+.TP
+.BR \-\-no\-utf8
+Disable UTF-8 mode.
+.TP
+.BR \-w ", " \-\-width\ \fIcols\fR
+Set terminal width.
+.TP
+.BR \-j ", " \-\-height\ \fIrows\fR
+Set terminal height.
+.TP
+.BR \-J ", " \-\-raw
+Enable raw terminal input.
+.TP
+.BR \-\-no\-raw
+Disable raw terminal input.
+.TP
+.BR \-\-cursor\-style\ \fIstyle\fR
+Set cursor style (
+.IR block ,
+.IR underline ,
+.IR bar ).
+.TP
+.BR \-\-no\-blink
+Disable cursor blinking.
+.TP
+.BR \-\-blink
+Enable cursor blinking.
+.SS History
+.TP
+.BR \-y ", " \-\-no\-history
+Disable command history.
+.TP
+.BR \-Y ", " \-\-history\-file\ \fIfile\fR
+Set the history file path.
+.TP
+.BR \-z ", " \-\-history\-size\ \fIn\fR
+Set the maximum number of history entries.
+.TP
+.BR \-Z ", " \-\-no\-history\-share
+Do not share history across sessions.
+.SS Prompt
+.TP
+.BR \-\-no\-prompt
+Disable the prompt entirely.
+.TP
+.BR \-T ", " \-\-prompt\-format\ \fIformat\fR
+Set the prompt format string.
+.TP
+.BR \-A ", " \-\-prompt\-char\ \fIchar\fR
+Set the prompt character.
+.TP
+.BR \-\-no\-transient\-prompt
+Disable transient prompt substitution.
+.TP
+.BR \-L ", " \-\-instant\-prompt
+Enable instant prompt mode.
+.TP
+.BR \-\-no\-instant\-prompt
+Disable instant prompt mode.
+.SS Jobs
+.TP
+.BR \-k ", " \-\-no\-jobs
+Disable job control.
+.TP
+.BR \-K ", " \-\-monitor
+Enable job control monitoring.
+.SS Signals
+.TP
+.BR \-\-no\-signals
+Disable signal handling.
+.TP
+.BR \-S ", " \-\-forward\-signals
+Forward signals to child processes.
+.TP
+.BR \-\-no\-forward\-signals
+Do not forward signals to child processes.
+.SS Security
+.TP
+.BR \-B ", " \-\-sandbox
+Enable sandbox mode.
+.TP
+.BR \-\-no\-sandbox
+Disable sandbox mode.
+.TP
+.BR \-\-no\-exec
+Disable exec builtin.
+.TP
+.BR \-\-dry\-run
+Parse and report without executing.
+.SS Configuration
+.TP
+.BR \-o ", " \-\-print\-config
+Print the effective configuration.
+.TP
+.BR \-O ", " \-\-dump\-config
+Dump the full configuration in TOML format.
+.TP
+.BR \-P ", " \-\-show\-config\-path
+Show the path to the configuration file.
+.TP
+.BR \-D ", " \-\-show\-config\-dir
+Show the configuration directory path.
+.TP
+.BR \-\-config\-file\ \fIfile\fR
+Use
+.I file
+as the configuration file.
+.TP
+.BR \-\-no\-config
+Skip loading any configuration file.
+.SS Config Generation
+.TP
+.BR \-G ", " \-\-gen\-cfg
+Generate a default configuration file.
+.TP
+.BR \-X ", " \-\-gen\-dycfg
+Generate a dynamic configuration file.
+.SS Branding
+.TP
+.BR \-\-app\-name\ \fIname\fR
+Set the application name.
+.TP
+.BR \-\-shell\-name\ \fIname\fR
+Set the shell name.
+.TP
+.BR \-\-tagline\ \fItext\fR
+Set the startup tagline.
+.SH BUILTINS
+.TP
+.I cd
+Change the current directory.
+.TP
+.I exit
+Exit the shell with an optional status code.
+.TP
+.I export
+Mark variables for export to the environment.
+.TP
+.I unset
+Remove variables or functions.
+.TP
+.I alias
+Create or display command aliases.
+.TP
+.I unalias
+Remove aliases.
+.TP
+.I source / .
+Read and execute commands from a file.
+.TP
+.I history
+Display or manipulate command history.
+.TP
+.I set
+Set or unset shell options and positional parameters.
+.TP
+.I env
+Display or set the environment.
+.TP
+.I pwd
+Print the current working directory.
+.TP
+.I type
+Display how a command name would be interpreted.
+.TP
+.I which
+Locate a command in PATH.
+.TP
+.I echo
+Print arguments to standard output.
+.TP
+.I printf
+Format and print arguments.
+.TP
+.I test / [
+Evaluate a conditional expression.
+.TP
+.I let
+Evaluate arithmetic expressions.
+.TP
+.I (())
+Evaluate arithmetic expressions in a subshell context.
+.TP
+.I math
+Evaluate a mathematical expression.
+.TP
+.I regexmatch
+Match a string against a regular expression.
+.TP
+.I exec
+Replace the shell with a command.
+.TP
+.I trap
+Set or unmask signal handlers.
+.TP
+.I pushd
+Push a directory onto the directory stack.
+.TP
+.I popd
+Pop a directory from the directory stack.
+.TP
+.I dirs
+Display the directory stack.
+.TP
+.I readonly
+Mark variables as read-only.
+.TP
+.I declare
+Declare variables with attributes.
+.TP
+.I hash
+Remember or forget command locations.
+.TP
+.I builtin
+Invoke a builtin command directly.
+.TP
+.I shopt
+Set or unset shell options.
+.TP
+.I jobs
+List active jobs.
+.TP
+.I fg
+Bring a job to the foreground.
+.TP
+.I bg
+Resume a job in the background.
+.TP
+.I wait
+Wait for background jobs to complete.
+.TP
+.I kill
+Send a signal to a process.
+.TP
+.I umask
+Set the file-creation mask.
+.TP
+.I command
+Invoke a command, bypassing shell functions.
+.TP
+.I eval
+Evaluate arguments as shell code.
+.TP
+.I select
+Display a menu and read user selection.
+.TP
+.I getopts
+Parse positional parameters for option letters.
+.TP
+.I read
+Read a line from standard input.
+.TP
+.I local
+Declare local variables within a function.
+.TP
+.I true
+Return a successful exit status.
+.TP
+.I false
+Return a failing exit status.
+.TP
+.I suspend
+Suspend the shell.
+.TP
+.I mapfile
+Read lines into an indexed array.
+.TP
+.I compgen
+Generate possible completions.
+.TP
+.I complete
+Define completion specifications.
+.TP
+.I fc
+Display or edit the history list.
+.TP
+.I disown
+Remove jobs from the job table.
+.TP
+.I coproc
+Start a coprocess.
+.TP
+.I enable
+Enable or disable builtin commands.
+.TP
+.I test
+Evaluate conditional expressions with file operators
+.RB ( \-f ,
+.BR \-d ,
+.BR \-e ,
+.BR \-r ,
+.BR \-w ,
+.BR \-x ,
+.BR \-s ,
+.BR \-c ,
+.BR \-b ,
+.BR \-p ,
+.BR \-L ,
+.BR \-S ,
+.BR \-N ,
+.BR \-O ,
+.BR \-G ,
+.BR \-nt ,
+.BR \-ot ,
+.BR \-ef ).
+.TP
+.I break
+Exit a loop.
+.TP
+.I continue
+Skip to the next iteration of a loop.
+.TP
+.I return
+Return from a function with an optional status code.
+.SH SHELL SYNTAX
+.SS Commands and Operators
+Simple commands, pipelines using
+.BR | ,
+and logical operators
+.BR && ,
+.BR || ,
+.BR ; ,
+and
+.B !
+are supported.
+.SS Redirects
+.TP
+.IR "> " and " >>"
+Redirect stdout; append with
+.BR >> .
+.TP
+.I <
+Redirect stdin.
+.TP
+.I 2>
+Redirect stderr.
+.TP
+.I &>
+Redirect both stdout and stderr.
+.TP
+.I <<<
+Here string.
+.TP
+.IR "<< " and " <<\-"
+Here document; the
+.B <<\-
+variant strips leading tabs.
+.TP
+.IR "<& " and " >&"
+Duplicate file descriptors.
+.TP
+.IR ">>& " and " >|"
+Append to file descriptor; overwrite with
+.BR >| .
+.SS Variable Expansion
+.TP
+.I ${var:\-default}
+Use
+.I default
+if
+.I var
+is unset or empty.
+.TP
+.I ${var:+alt}
+Use
+.I alt
+if
+.I var
+is set and non-empty.
+.TP
+.I ${var:=val}
+Assign
+.I val
+to
+.I var
+if unset or empty, then expand.
+.TP
+.I ${var?err}
+Display
+.I err
+and exit if
+.I var
+is unset or empty.
+.TP
+.I ${#var}
+Length of
+.IR var .
+.TP
+.IR ${var#} ", " ${var##}
+Remove shortest or longest prefix matching a pattern.
+.TP
+.IR ${var%} ", " ${var%%}
+Remove shortest or longest suffix matching a pattern.
+.TP
+.IR ${var/old/new} ", " ${var//old/new}
+Replace the first or all occurrences of
+.I old
+with
+.IR new .
+.SS Parameter Expansion Extras
+.TP
+.I ${var@Q}
+Quoted value.
+.TP
+.I ${var@E}
+Expanded value with escape processing.
+.TP
+.I ${var@U}
+Uppercase expansion.
+.TP
+.I ${var@u}
+Capitalize the first character.
+.TP
+.I ${var@a}
+Attribute flags of the variable.
+.TP
+.I ${var@P}
+Prompt-expansion of the value.
+.SS Other Expansions
+.TP
+.I $()
+Command substitution (also backtick syntax).
+.TP
+.IR $(( )) " and " $[ ]
+Arithmetic expansion.
+.TP
+.I {a,b,c}
+Brace expansion; also ranges like
+.IR {1..5} .
+.TP
+.IR ~ " and " ~user
+Tilde expansion to home directories.
+.TP
+.IR <() " and " >()
+Process substitution.
+.TP
+.I $'...'
+ANSI-C quoting with escape sequences.
+.TP
+.I <<
+Here documents.
+.TP
+.I <<<
+Here strings.
+.SS Glob Patterns
+.BR * ,
+.BR ? ,
+.BR [abc] ,
+.BR [a-z] ,
+and
+.B [!abc]
+are supported for filename generation.
+.SH CONTROL FLOW
+.TP
+.I if/elif/else/fi
+Conditional execution.
+.TP
+.I for
+Iterate over a word list or use C-style
+.IR for\ (( )) .
+.TP
+.I while/until
+Loop while or until a condition is true.
+.TP
+.I case/esac
+Pattern matching with
+.BR ;; ,
+.BR ;& ,
+and
+.BR ;;&
+terminators.
+.TP
+.I Functions
+Defined with
+.I name ()
+or
+.IR function\ name ;
+support
+.I local
+variables.
+.TP
+.I Subshells and brace groups
+Parentheses
+.RB ( )
+and braces
+.RB { }
+group commands.
+.TP
+.I coproc
+Run a command as a coprocess.
+.TP
+.I break/continue N
+Exit or skip
+.I N
+enclosing loops.
+.SH SPECIAL VARIABLES
+.TP
+.I $$
+Process ID of the shell.
+.TP
+.I $?
+Exit status of the last command.
+.TP
+.I $!
+PID of the most recent background command.
+.TP
+.I $#
+Number of positional parameters.
+.TP
+.I $@
+All positional parameters as separate words.
+.TP
+.I $*
+All positional parameters as a single word.
+.TP
+.I $0
+Name of the shell or script.
+.TP
+.I $1 \- $9
+Positional parameters.
+.TP
+.I $-
+Current shell option flags.
+.TP
+.I $_
+Last argument of the previous command.
+.TP
+.I BASH_VERSION
+Version string of the shell.
+.TP
+.I BASH
+Absolute path to the shell binary.
+.TP
+.I PWD
+Current working directory.
+.TP
+.I OLDPWD
+Previous working directory.
+.TP
+.I HOME
+User home directory.
+.TP
+.I USER
+Current username.
+.TP
+.I HOSTNAME
+Machine hostname.
+.TP
+.I SHLVL
+Shell nesting level.
+.TP
+.I SHELL
+Path to the shell.
+.TP
+.I PPID
+Parent process ID.
+.TP
+.I UID
+Real user ID.
+.TP
+.I EUID
+Effective user ID.
+.TP
+.I GID
+Real group ID.
+.TP
+.I LINENO
+Current line number in the script.
+.TP
+.I BASH_REMATCH
+Array of matched groups from the last regex match.
+.TP
+.I BASH_SOURCE
+Array of source file names.
+.TP
+.I FUNCNAME
+Name of the currently executing function.
+.TP
+.I BASH_ALIASES
+Associative array of defined aliases.
+.TP
+.I BASH_CMDS
+Associative array of hashed command locations.
+.TP
+.I PIPESTATUS
+Array of exit statuses of commands in the most recent pipeline.
+.TP
+.I DIRSTACK
+Array representing the directory stack.
+.TP
+.I SECONDS
+Number of seconds since shell invocation.
+.TP
+.I HISTCMD
+History number of the current command.
+.TP
+.I RANDOM
+A random integer between 0 and 32767.
+.TP
+.I COPROC_PID
+PID of the most recent coprocess.
+.TP
+.I COPROC
+Array holding the file descriptors of the most recent coprocess.
+.SH SHOPT OPTIONS
+.TP
+.I extglob
+Enable extended globbing patterns.
+.TP
+.I globstar
+Enable
+.B **
+to match files recursively.
+.TP
+.I nullglob
+Expand globs to nothing when no matches are found.
+.TP
+.I dotglob
+Include dotfiles in glob expansion.
+.TP
+.I failglob
+Fail on globs that match nothing.
+.TP
+.I nocaseglob
+Case-insensitive glob expansion.
+.TP
+.I nocasematch
+Case-insensitive pattern matching in
+.I case
+and
+.I [[ ]].
+.TP
+.I cmdhist
+Save multi-line commands as one history entry.
+.TP
+.I lithist
+Save commands with literal newlines in history.
+.TP
+.I lastpipe
+Run the last command of a pipeline in the current shell.
+.SH PROMPT ESCAPES
+The following escape sequences are recognized in prompt strings:
+.TP
+.I \ newline
+Newline.
+.TP
+.I \t
+Current time in 24-hour HH:MM:SS format.
+.TP
+.I \e
+Escape character.
+.TP
+.I \a
+Alert (bell).
+.TP
+.I \b
+Backspace.
+.TP
+.I \f
+Form feed.
+.TP
+.I \v
+Vertical tab.
+.TP
+.I \r
+Carriage return.
+.TP
+.I \s
+Name of the shell.
+.TP
+.I \u
+Current username.
+.TP
+.I \h
+Hostname up to the first dot.
+.TP
+.I \H
+Full hostname.
+.TP
+.I \w
+Current working directory.
+.TP
+.I \W
+Basename of the current working directory.
+.TP
+.I \d
+Current date in "Weekday Month Day" format.
+.TP
+.I \!
+History number of the current command.
+.TP
+.I \#
+Command number of the current command.
 .SH FILES
 .TP
 .I ~/.config/context/c.toml
-Main configuration file (15 sections: history, cursor, prompt, box_config,
-colors, symbols, ascii, execution, startup, editor, display, completion,
-signals, environment, branding).
+Main configuration file.
 .TP
 .I ~/.ctxrc
-Sourced on startup for aliases, exports, and environment.
+Alternate user configuration file.
 .TP
-.I ~/.ctx/.history
-Persistent command history.
-.SH AUTHOR
-Mapuse
+.I ~/.ctx_history
+Command history file.
+.TP
+.I ~/.config/context/modules/
+Directory for installed modules and plugins.
+.SH ENVIRONMENT
+.TP
+.I TERM
+Terminal type, used for capability lookups.
+.TP
+.I PATH
+Colon-separated list of directories to search for commands.
+.TP
+.I HOME
+User home directory; default for
+.BR cd .
+.TP
+.I USER
+Current user name.
+.TP
+.I SHELL
+Path to the user's default shell.
+.TP
+.I PWD
+Current working directory.
+.SH EXIT STATUS
+.TP
+.B 0
+Success.
+.TP
+.B 1\-125
+Non-zero failure (command-specific).
+.TP
+.B 126
+Command found but not executable.
+.TP
+.B 127
+Command not found.
+.TP
+.B 128+N
+Terminated by signal
+.IR N .
+.SH SIGNALS
+.B SIGINT
+.RB ( ^C )
+and
+.B SIGQUIT
+.RB ( ^\e )
+are caught in interactive mode to interrupt or quit the current foreground
+process.
+.B SIGTERM
+is handled gracefully, allowing cleanup of temporary files and history.
+.B SIGHUP
+is forwarded to background jobs when the shell exits.
+.B SIGTSTP
+.RB ( ^Z )
+suspends the foreground job and
+.B SIGCONT
+resumes it.
+.B SIGWINCH
+updates internal terminal dimensions on resize.
+.SH EXAMPLES
+.TP
+.I ctx \-c "echo hello"
+Execute a single command and exit.
+.TP
+.I ctx \-f script.sh
+Run a shell script.
+.TP
+.I ctx \-p
+Start in POSIX mode for maximum portability.
+.TP
+.I ctx \-i \-T '%n@%h %w> '
+Start an interactive session with a custom prompt.
+.TP
+.I ctx \-\-benchmark \-c "sleep 0.1"
+Run a command in benchmark mode to measure performance.
+.SH SEE ALSO
+.BR sh (1),
+.BR bash (1),
+.BR dash (1)
+.SH AUTHORS
+Written by the Context contributors and the open-source community.
 .SH LICENSE
-MIT
+MIT License.

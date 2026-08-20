@@ -2,7 +2,7 @@ use std::ffi::CString;
 use std::fs::{File, OpenOptions};
 use std::io::Write;
 use std::os::unix::fs::FileTypeExt;
-use std::os::unix::io::AsRawFd;
+use std::os::unix::io::{AsRawFd, RawFd};
 use std::path::Path;
 
 use crate::config::Config;
@@ -13,9 +13,14 @@ use crate::shell::expand::Expander;
 use crate::shell::signals;
 
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, LazyLock, Mutex};
 
 const MAX_ALIAS_EXPAND: usize = 10;
+
+pub static BASH_REMATCH: LazyLock<Mutex<Vec<String>>> = LazyLock::new(|| Mutex::new(Vec::new()));
+pub static SOURCE_STACK: LazyLock<Mutex<Vec<String>>> = LazyLock::new(|| Mutex::new(vec![String::new()]));
+pub type CoprocEntry = (Option<String>, RawFd, RawFd);
+pub static COPROC_FDS: LazyLock<Mutex<Vec<CoprocEntry>>> = LazyLock::new(|| Mutex::new(Vec::new()));
 
 #[derive(Debug, Clone)]
 pub struct Job {
@@ -25,16 +30,15 @@ pub struct Job {
     pub running: bool,
 }
 
-type ExpandedCaseArm = (Vec<String>, Box<Node>);
+type ExpandedCaseArm = (Vec<String>, Box<Node>, CaseTerminator);
 
 pub struct Executor {
     pub env: Env,
     pub cfg: Config,
     pub last_status: i32,
-    pub functions: std::collections::HashMap<String, Node>,
+    pub functions: Arc<std::sync::Mutex<std::collections::HashMap<String, Node>>>,
     pub jobs: Vec<Job>,
     pub clear_history: bool,
-    pub disabled_builtins: std::collections::HashSet<String>,
     prev_cwd: String,
     next_job_id: usize,
     fork_count: Arc<AtomicUsize>,
@@ -42,6 +46,7 @@ pub struct Executor {
     loop_depth: usize,
     return_value: Option<i32>,
     function_depth: usize,
+    pipe_statuses: Vec<i32>,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -59,6 +64,8 @@ enum LoopAction {
 
 impl Executor {
     pub fn new(env: Env, cfg: Config) -> Self {
+
+        builtin::set_mask_secrets(cfg.security.mask_secrets);
 
         if let Ok(mask) = u32::from_str_radix(cfg.execution.umask.trim_start_matches('0'), 8) {
             unsafe { libc::umask(mask as libc::mode_t); }
@@ -82,14 +89,14 @@ impl Executor {
         if !cfg.environment.inherit_parent {
             env.clear_inherited(&default_keys);
         }
-        Self {
+        let functions_arc = Arc::new(std::sync::Mutex::new(std::collections::HashMap::new()));
+        let executor = Self {
             env,
             cfg,
             last_status: 0,
-            functions: std::collections::HashMap::new(),
+            functions: functions_arc.clone(),
             jobs: Vec::new(),
             clear_history: false,
-            disabled_builtins: std::collections::HashSet::new(),
             prev_cwd: std::env::current_dir()
                 .map(|p| p.to_string_lossy().to_string())
                 .unwrap_or_default(),
@@ -99,7 +106,15 @@ impl Executor {
             loop_depth: 0,
             return_value: None,
             function_depth: 0,
-        }
+            pipe_statuses: Vec::new(),
+        };
+
+        let _ = builtin::GET_FUNCTION_CB.set(std::sync::Mutex::new(Some(Box::new(move |name: &str| -> Option<String> {
+            let map = functions_arc.lock().unwrap();
+            map.get(name).map(|node| format!("{:?}", node))
+        }))));
+
+        executor
     }
 
     pub fn run_source_rc(&mut self, override_rc: Option<&str>) {
@@ -150,9 +165,9 @@ impl Executor {
                     }
                 }
 
-        if cfg.integration.starship_prompt
-            && self.find_in_path("starship").is_some()
-                && let Ok(output) = std::process::Command::new("starship")
+        if cfg.integration.starship_prompt {
+            if self.find_in_path("starship").is_some() {
+                if let Ok(output) = std::process::Command::new("starship")
                     .args(["init", "bash"])
                     .output()
                     && output.status.success() {
@@ -161,6 +176,10 @@ impl Executor {
                         let ast = crate::shell::parser::parse(tokens);
                         self.execute(&ast);
                     }
+            } else {
+                eprintln!("context: starship_prompt enabled but starship not found in PATH");
+            }
+        }
     }
 
     pub fn execute(&mut self, node: &Node) -> i32 {
@@ -191,15 +210,23 @@ impl Executor {
         if current_cwd != self.prev_cwd {
             self.prev_cwd = current_cwd;
         }
-        if self.opt_e() && status != 0 {
-            match node {
+        if status != 0 {
+            let ignorable = matches!(
+                node,
                 Node::Empty | Node::If { .. } | Node::While { .. } | Node::Until { .. }
-                | Node::Compound { .. } | Node::Function { .. } | Node::Arithmetic { .. } => {}
-                _ => {
-                    eprintln!("context: terminating on errexit (status {})", status);
-                    signals::EXIT_CODE.store(status, std::sync::atomic::Ordering::SeqCst);
-                    signals::SHOULD_EXIT.store(true, std::sync::atomic::Ordering::SeqCst);
-                }
+                | Node::Compound { .. } | Node::Function { .. } | Node::Arithmetic { .. }
+            );
+            if !ignorable
+                && let Some(cmd) = self.env.get_trap("ERR").map(|s| s.to_string())
+                    && !cmd.is_empty() {
+                        let tokens = crate::shell::lexer::tokenize(&cmd);
+                        let ast = crate::shell::parser::parse(tokens);
+                        self.execute(&ast);
+                    }
+            if self.opt_e() && !ignorable {
+                eprintln!("context: terminating on errexit (status {})", status);
+                signals::EXIT_CODE.store(status, std::sync::atomic::Ordering::SeqCst);
+                signals::SHOULD_EXIT.store(true, std::sync::atomic::Ordering::SeqCst);
             }
         }
         status
@@ -257,14 +284,14 @@ impl Executor {
                     self.audit_log(&words.join(" "));
                 }
 
-                if let Some(func_body) = self.functions.get(&words[0]).cloned() {
+                if let Some(func_body) = { self.functions.lock().unwrap().get(&words[0]).cloned() } {
                     let saved = self.env.push_scope();
                     let saved_positional = self.env.positional().to_vec();
                     let nounset = self.opt_u();
                     let bg_pid = signals::BACKGROUND_PID.load(std::sync::atomic::Ordering::SeqCst);
                     let mut expander = Expander::new(&mut self.env, self.last_status, vec![], bg_pid);
                     expander.set_nounset(nounset);
-                    let expanded_words: Vec<String> = words[1..].iter().map(|w| strip_markers(&expander.expand_word(w))).collect();
+                    let expanded_words: Vec<String> = words[1..].iter().flat_map(|w| expander.expand_words(w)).map(|w| strip_markers(&w)).collect();
                     let nounset_err = expander.had_nounset_error();
                     drop(expander);
                     self.env.set_positional(expanded_words.clone());
@@ -276,9 +303,19 @@ impl Executor {
                         self.env.set_local("#", &expanded_words.len().to_string());
                     }
                     self.function_depth += 1;
+                    builtin::FUNCTION_DEPTH.store(self.function_depth, std::sync::atomic::Ordering::Relaxed);
+                    builtin::CALL_STACK.lock().unwrap().push(builtin::CallerFrame { name: words[0].clone(), line: 0 });
                     let status = if nounset_err { 1 } else { self.execute(&func_body) };
+                    builtin::CALL_STACK.lock().unwrap().pop();
                     self.function_depth -= 1;
+                    builtin::FUNCTION_DEPTH.store(self.function_depth, std::sync::atomic::Ordering::Relaxed);
                     let status = self.return_value.take().unwrap_or(status);
+                    if let Some(cmd) = self.env.get_trap("RETURN").map(|s| s.to_string())
+                        && !cmd.is_empty() {
+                            let tokens = crate::shell::lexer::tokenize(&cmd);
+                            let ast = crate::shell::parser::parse(tokens);
+                            self.execute(&ast);
+                        }
                     self.env.pop_scope(saved);
                     self.env.set_positional(saved_positional);
                     self.last_status = status;
@@ -290,11 +327,15 @@ impl Executor {
                 } else {
                     words.clone()
                 };
+                let (words, ps_pids) = setup_process_sub(&words);
+                for pid in &ps_pids {
+                    unsafe { libc::setpgid(*pid, *pid); }
+                }
                 let bg_pid = signals::BACKGROUND_PID.load(std::sync::atomic::Ordering::SeqCst);
                 let nounset = self.opt_u();
                 let mut expander = Expander::new(&mut self.env, self.last_status, vec![], bg_pid);
                 expander.set_nounset(nounset);
-                let words: Vec<String> = words.iter().map(|w| expander.expand_word(w)).collect();
+                let words: Vec<String> = words.iter().flat_map(|w| expander.expand_words(w)).collect();
                 let pending = expander.take_pending_sets();
                 let nounset_err = expander.had_nounset_error();
                 drop(expander);
@@ -303,11 +344,18 @@ impl Executor {
                 }
                 if nounset_err { return 1; }
                 let words = self.word_split(&words);
-                let words = self.expand_globs(&words);
-                if words.is_empty() { return 0; }
+                let (words, glob_status) = self.expand_globs(&words);
+                if words.is_empty() { return glob_status; }
                 self.trace_print(&words);
 
-                let is_builtin = builtin_is(&words[0]) && !self.disabled_builtins.contains(&words[0]);
+                if let Some(debug_cmd) = self.env.get_trap("DEBUG").map(|s| s.to_string())
+                    && !debug_cmd.is_empty() {
+                        let tokens = crate::shell::lexer::tokenize(&debug_cmd);
+                        let ast = crate::shell::parser::parse(tokens);
+                        self.execute(&ast);
+                    }
+
+                let is_builtin = builtin_is(&words[0]) && !builtin::is_disabled(&words[0]);
                 if is_builtin {
                     match words[0].as_str() {
                         "exec" => {
@@ -320,7 +368,38 @@ impl Executor {
                                     return builtin::run(&words[1..], &mut self.env, &self.cfg, self.last_status).status;
                                 }
 
-                                let cmd = &words[1];
+                                let mut cmd_idx = 1;
+                                let mut clear_env = false;
+                                let mut login_shell = false;
+                                let mut argv0: Option<String> = None;
+                                while cmd_idx < words.len() && words[cmd_idx].starts_with('-') && words[cmd_idx].len() > 1 {
+                                    let flag = &words[cmd_idx][1..];
+                                    if flag == "c" {
+                                        clear_env = true;
+                                        cmd_idx += 1;
+                                    } else if flag == "l" || flag == "--login" {
+                                        login_shell = true;
+                                        cmd_idx += 1;
+                                    } else if flag == "a" || flag == "--argv0" {
+                                        cmd_idx += 1;
+                                        if cmd_idx < words.len() {
+                                            argv0 = Some(words[cmd_idx].clone());
+                                            cmd_idx += 1;
+                                        }
+                                    } else {
+                                        break;
+                                    }
+                                }
+
+                                if clear_env {
+                                    unsafe { libc::clearenv(); }
+                                }
+
+                                if cmd_idx >= words.len() {
+                                    return 0;
+                                }
+
+                                let cmd = &words[cmd_idx];
                                 let path = if cmd.contains('/') {
                                     cmd.clone()
                                 } else if let Some(p) = self.find_in_path(cmd) {
@@ -330,23 +409,36 @@ impl Executor {
                                     return 127;
                                 };
 
-                                match unsafe { libc::fork() } {
-                                    -1 => { eprintln!("context: exec: fork failed"); return 1; }
-                                    0 => {
-                                        unsafe { libc::setpgid(0, 0); }
-                                        self.child_exec(&words[1..], &[], &path);
+                                let c_args: Vec<CString> = words[cmd_idx..].iter()
+                                    .map(|w| strip_markers(w))
+                                    .filter_map(|w| CString::new(w).ok())
+                                    .collect();
+                                let mut c_ptrs: Vec<*const libc::c_char> = c_args.iter().map(|s| s.as_ptr()).collect();
+                                c_ptrs.push(std::ptr::null());
+                                let exec_path = CString::new(path.as_str()).unwrap_or_else(|_| CString::new("sh").expect("failed to create CString for sh"));
+                                if login_shell {
+                                    let mut login_name = path.rsplit('/').next().unwrap_or("sh").to_string();
+                                    login_name.insert(0, '-');
+                                    unsafe {
+                                        let c_login = CString::new(login_name).unwrap_or_else(|_| CString::new("-sh").unwrap());
+                                        libc::execvp(c_login.as_ptr(), c_ptrs.as_ptr());
                                     }
-                                    pid => {
-                                        let mut status: i32 = 0;
-                                        unsafe { libc::waitpid(pid, &mut status, 0); }
-                                        let exit = if libc::WIFEXITED(status) { libc::WEXITSTATUS(status) }
-                                                   else if libc::WIFSIGNALED(status) { 128 + libc::WTERMSIG(status) }
-                                                   else { 1 };
-
-                                        signals::EXIT_CODE.store(exit, std::sync::atomic::Ordering::SeqCst);
-                                        signals::SHOULD_EXIT.store(true, std::sync::atomic::Ordering::SeqCst);
-                                        return exit;
-                                    }
+                                } else if let Some(ref a0) = argv0 {
+                                    let mut new_args: Vec<CString> = vec![CString::new(a0.as_str()).unwrap()];
+                                    new_args.extend(c_args.iter().cloned());
+                                    let mut new_ptrs: Vec<*const libc::c_char> = new_args.iter().map(|s| s.as_ptr()).collect();
+                                    new_ptrs.push(std::ptr::null());
+                                    unsafe { libc::execvp(exec_path.as_ptr(), new_ptrs.as_ptr()); }
+                                } else {
+                                    unsafe { libc::execvp(exec_path.as_ptr(), c_ptrs.as_ptr()); }
+                                }
+                                let err = std::io::Error::last_os_error().raw_os_error().unwrap_or(0);
+                                if err == libc::ENOENT {
+                                    eprintln!("context: exec: {}: command not found", cmd);
+                                    unsafe { libc::_exit(127); }
+                                } else {
+                                    eprintln!("context: exec: {}: {}", cmd, std::io::Error::last_os_error());
+                                    unsafe { libc::_exit(126); }
                                 }
                             }
 
@@ -359,22 +451,47 @@ impl Executor {
                         }
                         "jobs" => {
                             self.cleanup_jobs();
+                            let mut show_running = false;
+                            let mut show_stopped = false;
+                            for arg in &words[1..] {
+                                if arg == "-r" {
+                                    show_running = true;
+                                } else if arg == "-s" {
+                                    show_stopped = true;
+                                }
+                            }
                             for job in &self.jobs {
+                                if show_running && !job.running { continue; }
+                                if show_stopped && job.running { continue; }
                                 let status = if job.running { "Running" } else { "Stopped" };
                                 println!("[{}] {} {} {}", job.id, status, job.pid, job.cmd);
                             }
                             return 0;
                         }
                         "fg" => {
-                            let job_id = words.get(1).and_then(|s| s.parse::<usize>().ok());
+                            let job_id = words.get(1)
+                                .and_then(|s| s.strip_prefix('%'))
+                                .and_then(|s| s.parse::<usize>().ok())
+                                .or_else(|| words.get(1).and_then(|s| s.parse::<usize>().ok()));
                             let job_opt = if let Some(id) = job_id {
                                 self.jobs.iter().position(|j| j.id == id).map(|pos| self.jobs.remove(pos))
                             } else {
                                 self.jobs.iter().rposition(|j| j.running).map(|pos| self.jobs.remove(pos))
                             };
                             if let Some(job) = job_opt {
-                                unsafe { libc::kill(job.pid, libc::SIGCONT); }
+                                unsafe {
+                                    libc::kill(-job.pid, libc::SIGCONT);
+                                    libc::tcsetpgrp(libc::STDIN_FILENO, job.pid);
+                                }
+                                signals::CHILD_PID.store(job.pid, std::sync::atomic::Ordering::SeqCst);
+                                signals::RUNNING.store(true, std::sync::atomic::Ordering::SeqCst);
                                 let exit = self.wait_for_pid(job.pid);
+                                unsafe {
+                                    libc::tcsetpgrp(libc::STDIN_FILENO, libc::getpgrp());
+                                }
+                                signals::RUNNING.store(false, std::sync::atomic::Ordering::SeqCst);
+                                signals::CHILD_PID.store(0, std::sync::atomic::Ordering::SeqCst);
+                                signals::set_foreground(0);
                                 if (147..=150).contains(&exit) {
                                     let new_job = Job {
                                         id: self.next_job_id,
@@ -394,11 +511,14 @@ impl Executor {
                             return 1;
                         }
                         "bg" => {
-                            let job_id = words.get(1).and_then(|s| s.parse::<usize>().ok());
+                            let job_id = words.get(1)
+                                .and_then(|s| s.strip_prefix('%'))
+                                .and_then(|s| s.parse::<usize>().ok())
+                                .or_else(|| words.get(1).and_then(|s| s.parse::<usize>().ok()));
                             if let Some(id) = job_id {
                                 if let Some(job) = self.jobs.iter_mut().find(|j| j.id == id) {
                                     unsafe {
-                                        libc::kill(job.pid, libc::SIGCONT);
+                                        libc::kill(-job.pid, libc::SIGCONT);
                                     }
                                     job.running = true;
                                     println!("[{}] {} &", job.id, job.cmd);
@@ -406,7 +526,7 @@ impl Executor {
                                 }
                             } else if let Some(job) = self.jobs.iter_mut().rev().find(|j| !j.running) {
                                 unsafe {
-                                    libc::kill(job.pid, libc::SIGCONT);
+                                    libc::kill(-job.pid, libc::SIGCONT);
                                 }
                                 job.running = true;
                                 println!("[{}] {} &", job.id, job.cmd);
@@ -415,13 +535,16 @@ impl Executor {
                             eprintln!("context: bg: no such job");
                             return 1;
                         }
-                        "enable" => {
-                            return self.cmd_enable(&words[1..]);
-                        }
                         "break" => {
                             let n = words.get(1).and_then(|s| s.parse::<u32>().ok()).unwrap_or(1);
                             if self.loop_depth == 0 {
                                 eprintln!("context: break: only meaningful in a loop");
+                                self.last_status = 1;
+                                signals::set_last_status(1);
+                                return 1;
+                            }
+                            if n > self.loop_depth as u32 {
+                                eprintln!("context: break: {}: loop levels exceeded", n);
                                 self.last_status = 1;
                                 signals::set_last_status(1);
                                 return 1;
@@ -432,13 +555,20 @@ impl Executor {
                             return 0;
                         }
                         "continue" => {
+                            let n = words.get(1).and_then(|s| s.parse::<u32>().ok()).unwrap_or(1);
                             if self.loop_depth == 0 {
                                 eprintln!("context: continue: only meaningful in a loop");
                                 self.last_status = 1;
                                 signals::set_last_status(1);
                                 return 1;
                             }
-                            self.loop_control = Some(LoopControl::Continue(words.get(1).and_then(|s| s.parse::<u32>().ok()).unwrap_or(1)));
+                            if n > self.loop_depth as u32 {
+                                eprintln!("context: continue: {}: loop levels exceeded", n);
+                                self.last_status = 1;
+                                signals::set_last_status(1);
+                                return 1;
+                            }
+                            self.loop_control = Some(LoopControl::Continue(n));
                             self.last_status = 0;
                             signals::set_last_status(0);
                             return 0;
@@ -458,9 +588,10 @@ impl Executor {
                         }
                         _ => {}
                     }
-                    let words = if words[0] == "kill" {
+                    let words = if words[0] == "kill" || words[0] == "wait" {
                         let mut resolved = words.clone();
-                        for arg in resolved.iter_mut().skip(2) {
+                        let skip = 1;
+                        for arg in resolved.iter_mut().skip(skip) {
                             if let Some(job_id_str) = arg.strip_prefix('%')
                                 && let Ok(job_id) = job_id_str.parse::<usize>()
                                     && let Some(job) = self.jobs.iter().find(|j| j.id == job_id) {
@@ -492,6 +623,64 @@ impl Executor {
                         }
                     }
                     let result = builtin::run(&words, &mut self.env, &self.cfg, self.last_status);
+                    if result.needs_executor {
+                        if words.len() > 1 {
+                            for r in redirects {
+                                self.apply_redirect(r);
+                            }
+                            if builtin_is(&words[1]) {
+                                return builtin::run(&words[1..], &mut self.env, &self.cfg, self.last_status).status;
+                            }
+                            let mut cmd_idx = 1;
+                            let mut clear_env = false;
+                            while cmd_idx < words.len() && words[cmd_idx].starts_with('-') && words[cmd_idx].len() > 1 {
+                                let flag = &words[cmd_idx][1..];
+                                if flag == "c" {
+                                    clear_env = true;
+                                    cmd_idx += 1;
+                                } else {
+                                    break;
+                                }
+                            }
+                            if clear_env {
+                                unsafe { libc::clearenv(); }
+                            }
+                            if cmd_idx >= words.len() {
+                                return 0;
+                            }
+                            let cmd = &words[cmd_idx];
+                            let path = if cmd.contains('/') {
+                                cmd.clone()
+                            } else if let Some(p) = self.find_in_path(cmd) {
+                                p
+                            } else {
+                                eprintln!("context: exec: {}: command not found", cmd);
+                                return 127;
+                            };
+                            let c_args: Vec<CString> = words[cmd_idx..].iter()
+                                .map(|w| strip_markers(w))
+                                .filter_map(|w| CString::new(w).ok())
+                                .collect();
+                            let mut c_ptrs: Vec<*const libc::c_char> = c_args.iter().map(|s| s.as_ptr()).collect();
+                            c_ptrs.push(std::ptr::null());
+                            let c_path = CString::new(path.as_str()).unwrap_or_else(|_| CString::new("sh").expect("failed to create CString for sh"));
+                            unsafe { libc::execvp(c_path.as_ptr(), c_ptrs.as_ptr()); }
+                            let err = std::io::Error::last_os_error().raw_os_error().unwrap_or(0);
+                            if err == libc::ENOENT {
+                                eprintln!("context: exec: {}: command not found", cmd);
+                                unsafe { libc::_exit(127); }
+                            } else {
+                                eprintln!("context: exec: {}: {}", cmd, std::io::Error::last_os_error());
+                                unsafe { libc::_exit(126); }
+                            }
+                        }
+                        for r in redirects {
+                            if !self.apply_redirect(r) {
+                                return 1;
+                            }
+                        }
+                        return 0;
+                    }
                     if !save_fds.is_empty() {
                         for (i, saved) in save_fds.iter().enumerate() {
                             unsafe {
@@ -512,10 +701,19 @@ impl Executor {
                         return status;
                     }
                     if let Some(path) = result.source_file {
-                        let status = self.source_file(&path);
-                        self.last_status = status;
-                        signals::set_last_status(status);
-                        return status;
+                        if let Some(extra) = result.source_args {
+                            let old_positional = self.env.positional().to_vec();
+                            self.env.set_positional(extra);
+                            let status = self.source_file(&path);
+                            self.env.set_positional(old_positional);
+                            self.last_status = status;
+                            signals::set_last_status(status);
+                        } else {
+                            let status = self.source_file(&path);
+                            self.last_status = status;
+                            signals::set_last_status(status);
+                        }
+                        return self.last_status;
                     }
                     let status = result.status;
                     self.last_status = status;
@@ -550,6 +748,9 @@ impl Executor {
                 let n = commands.len();
                 if n == 0 { return 0; }
                 if n == 1 { return self.execute(&commands[0]); }
+                self.env.set("PIPESTATUS", "0");
+                let lastpipe = self.env.get("_SHOPT_LASTPIPE").map(|s| s == "1").unwrap_or(false);
+                let last_is_simple = lastpipe && matches!(commands.last(), Some(Node::Command { .. }));
                 let mut pipes: Vec<[i32; 2]> = Vec::new();
                 for _ in 0..n-1 {
                     let mut fds = [0i32; 2];
@@ -557,7 +758,8 @@ impl Executor {
                     pipes.push(fds);
                 }
                 let mut children: Vec<i32> = Vec::new();
-                for (i, cmd) in commands.iter().enumerate() {
+                let fork_count = if last_is_simple { n - 1 } else { n };
+                for (i, cmd) in commands.iter().take(fork_count).enumerate() {
                     match unsafe { libc::fork() } {
                         -1 => {
                             for p in &pipes {
@@ -579,7 +781,7 @@ impl Executor {
                             }
                             signals::setup_child_handlers();
                             let status = self.execute(cmd);
-                            std::process::exit(status);
+                            unsafe { libc::_exit(status); }
                         }
                         pid => {
                             children.push(pid);
@@ -590,24 +792,55 @@ impl Executor {
                         }
                     }
                 }
-                for p in &pipes { unsafe { libc::close(p[0]); libc::close(p[1]); } }
+                let lastpipe_status = if last_is_simple {
+                    let saved_stdin = unsafe { libc::dup(libc::STDIN_FILENO) };
+                    unsafe { libc::dup2(pipes[n - 2][0], libc::STDIN_FILENO); }
+                    for p in &pipes {
+                        unsafe { libc::close(p[0]); libc::close(p[1]); }
+                    }
+                    let status = self.execute(commands.last().unwrap());
+                    unsafe {
+                        libc::dup2(saved_stdin, libc::STDIN_FILENO);
+                        libc::close(saved_stdin);
+                    }
+                    Some(status)
+                } else {
+                    for p in &pipes {
+                        unsafe { libc::close(p[0]); libc::close(p[1]); }
+                    }
+                    None
+                };
                 let mut last_status = 0;
                 let mut any_nonzero = 0;
+                self.pipe_statuses.clear();
                 for pid in children {
                     let mut status: i32 = 0;
                     unsafe { libc::waitpid(pid, &mut status, 0); }
                     let exit = if libc::WIFEXITED(status) { libc::WEXITSTATUS(status) }
                                  else if libc::WIFSIGNALED(status) { 128 + libc::WTERMSIG(status) }
                                  else { 1 };
+                    self.pipe_statuses.push(exit);
                     if exit != 0 {
                         any_nonzero = exit;
                     }
                     last_status = exit;
                 }
+                if let Some(lp_status) = lastpipe_status {
+                    self.pipe_statuses.push(lp_status);
+                    if lp_status != 0 {
+                        any_nonzero = lp_status;
+                    }
+                    last_status = lp_status;
+                }
                 if (self.opt_pipefail() || self.cfg.execution.exit_on_pipefail) && any_nonzero != 0 {
                     last_status = any_nonzero;
                 }
                 if *bang { last_status = if last_status == 0 { 1 } else { 0 }; }
+                let pipe_str = self.pipe_statuses.iter()
+                    .map(|s| s.to_string())
+                    .collect::<Vec<_>>()
+                    .join(" ");
+                self.env.set("PIPESTATUS", &pipe_str);
                 self.last_status = last_status;
                 signals::set_last_status(last_status);
                 last_status
@@ -645,6 +878,13 @@ impl Executor {
                         signals::set_last_status(status);
                         status
                     }
+                    CompoundKind::Background => {
+                        self.execute(left);
+                        let status = self.execute(right);
+                        self.last_status = status;
+                        signals::set_last_status(status);
+                        status
+                    }
                 }
             }
             Node::Subshell { body } => {
@@ -653,7 +893,7 @@ impl Executor {
                     0 => {
                         signals::setup_child_handlers();
                         let status = self.execute(body);
-                        std::process::exit(status);
+                        unsafe { libc::_exit(status); }
                     }
                     pid => {
                         unsafe {
@@ -700,7 +940,14 @@ impl Executor {
                 for (k, v) in pending {
                     self.env.set(&k, &v);
                 }
-                self.env.set(name, &value);
+                if !self.env.set(name, &value) {
+                    self.last_status = 1;
+                    signals::set_last_status(1);
+                    return 1;
+                }
+                if self.opt_is("_OPT_A") {
+                    self.env.export(name);
+                }
                 0
             }
             Node::Arithmetic { expr } => {
@@ -841,26 +1088,48 @@ impl Executor {
                 let (expanded_word, expanded_arms): (String, Vec<ExpandedCaseArm>) = {
                     let mut expander = Expander::new(&mut self.env, self.last_status, vec![], 0);
                     let word = strip_markers(&expander.expand_word(word));
-                    let arms_expanded: Vec<(Vec<String>, Box<Node>)> = arms.iter().map(|(patterns, body)| {
+                    let arms_expanded: Vec<(Vec<String>, Box<Node>, CaseTerminator)> = arms.iter().map(|(patterns, body, term)| {
                         let expanded: Vec<String> = patterns.iter().map(|p| strip_markers(&expander.expand_word(p))).collect();
-                        (expanded, body.clone())
+                        (expanded, body.clone(), term.clone())
                     }).collect();
                     (word, arms_expanded)
                 };
-                for (patterns, body) in expanded_arms {
-                    for pat in &patterns {
-                        if pat == &expanded_word || glob_match(pat, &expanded_word) {
-                            let s = self.execute(&body);
-                            self.last_status = s;
-                            signals::set_last_status(s);
-                            return s;
+                let mut i = 0;
+                let mut fall_through = false;
+                while i < expanded_arms.len() {
+                    let (ref patterns, ref body, ref terminator) = expanded_arms[i];
+                    if !fall_through {
+                        let mut matched = false;
+                        for pat in patterns {
+                            if pat == &expanded_word || glob_match(pat, &expanded_word) {
+                                matched = true;
+                                break;
+                            }
+                        }
+                        if !matched {
+                            i += 1;
+                            continue;
+                        }
+                    }
+                    fall_through = false;
+                    let s = self.execute(body);
+                    self.last_status = s;
+                    signals::set_last_status(s);
+                    match terminator {
+                        CaseTerminator::DoubleSemi => return s,
+                        CaseTerminator::AmpSemi => {
+                            fall_through = true;
+                            i += 1;
+                        }
+                        CaseTerminator::SemiAmp => {
+                            i += 1;
                         }
                     }
                 }
                 0
             }
             Node::Function { name, body } => {
-                self.functions.insert(name.clone(), *body.clone());
+                self.functions.lock().unwrap().insert(name.clone(), *body.clone());
                 0
             }
             Node::TestDoubleBracket { tokens } => {
@@ -884,6 +1153,8 @@ impl Executor {
                     let mut expander = Expander::new(&mut self.env, self.last_status, vec![], 0);
                     values.iter().map(|v| strip_markers(&expander.expand_word(v))).collect()
                 };
+                let use_editor = unsafe { libc::isatty(libc::STDIN_FILENO) == 1 }
+                    && builtin::READLINE_CB.get().is_some();
                 let stdin = std::io::stdin();
                 let mut last = 0;
                 self.loop_depth += 1;
@@ -891,35 +1162,93 @@ impl Executor {
                     for (i, item) in iter_values.iter().enumerate() {
                         println!("  {}) {}", i + 1, item);
                     }
-                    let ps3 = self.env.get("PS3").unwrap_or("#?");
-                    eprint!("{} ", ps3);
+                    let ps3 = self.env.get("PS3").unwrap_or("#? ").to_string();
+                    eprint!("{}", ps3);
                     let _ = std::io::stderr().flush();
-                    let mut line = String::new();
-                    match stdin.read_line(&mut line) {
-                        Ok(0) => break,
-                        Ok(_) => {
-                            let line = line.trim().to_string();
-                            if line.is_empty() { continue; }
-                            if line == "EOF" || line == "quit" || line == "exit" { break; }
-                            if let Ok(n) = line.parse::<usize>()
-                                && n > 0 && n <= iter_values.len() {
-                                    self.env.set(var, &iter_values[n - 1]);
-                                    last = self.execute(body);
-                                    match self.loop_action() {
-                                        LoopAction::None => break,
-                                        LoopAction::Stop => break,
-                                        LoopAction::Continue => continue,
-                                    }
-                                }
-                            eprintln!("context: select: invalid selection");
+                    let line = if use_editor {
+                        match builtin::READLINE_CB.get().unwrap()(&ps3) {
+                            Ok(s) => s,
+                            Err(_) => break,
                         }
-                        Err(_) => break,
-                    }
+                    } else {
+                        let mut buf = String::new();
+                        match stdin.read_line(&mut buf) {
+                            Ok(0) => break,
+                            Ok(_) => buf,
+                            Err(_) => break,
+                        }
+                    };
+                    let line = line.trim().to_string();
+                    self.env.set("REPLY", &line);
+                    if line.is_empty() { continue; }
+                    if let Ok(n) = line.parse::<usize>()
+                        && n > 0 && n <= iter_values.len() {
+                            self.env.set(var, &iter_values[n - 1]);
+                            last = self.execute(body);
+                            match self.loop_action() {
+                                LoopAction::None => {}
+                                LoopAction::Stop => break,
+                                LoopAction::Continue => continue,
+                            }
+                            continue;
+                        }
+                    eprintln!("context: select: invalid selection");
                 }
                 self.loop_depth = self.loop_depth.saturating_sub(1);
                 self.last_status = last;
                 signals::set_last_status(last);
                 last
+            }
+            Node::Coproc { name, body } => {
+                let mut pipe_in = [0i32; 2];
+                let mut pipe_out = [0i32; 2];
+                unsafe {
+                    libc::pipe(pipe_in.as_mut_ptr());
+                    libc::pipe(pipe_out.as_mut_ptr());
+                }
+                match unsafe { libc::fork() } {
+                    -1 => {
+                        unsafe {
+                            libc::close(pipe_in[0]); libc::close(pipe_in[1]);
+                            libc::close(pipe_out[0]); libc::close(pipe_out[1]);
+                        }
+                        eprintln!("context: coproc: fork failed");
+                        1
+                    }
+                    0 => {
+                        unsafe {
+                            libc::close(pipe_in[1]);
+                            libc::close(pipe_out[0]);
+                            libc::dup2(pipe_in[0], libc::STDIN_FILENO);
+                            libc::close(pipe_in[0]);
+                            libc::dup2(pipe_out[1], libc::STDOUT_FILENO);
+                            libc::close(pipe_out[1]);
+                            libc::setpgid(0, 0);
+                            libc::signal(libc::SIGHUP, libc::SIG_IGN);
+                        }
+                        signals::setup_child_handlers();
+                        let status = self.execute(body);
+                        unsafe { libc::_exit(status); }
+                    }
+                    pid => {
+                        unsafe {
+                            libc::close(pipe_in[0]);
+                            libc::close(pipe_out[1]);
+                        }
+                        let read_fd = pipe_out[0];
+                        let write_fd = pipe_in[1];
+                        COPROC_FDS.lock().unwrap().push((name.clone(), read_fd, write_fd));
+                        if let Some(n) = name {
+                            self.env.set(&format!("COPROC_{}_PID", n), &pid.to_string());
+                            self.env.set("COPROC_PID", &pid.to_string());
+                            self.env.set("COPROC", n);
+                        } else {
+                            self.env.set("COPROC_PID", &pid.to_string());
+                            self.env.set("COPROC", "");
+                        }
+                        0
+                    }
+                }
             }
         }
     }
@@ -1000,6 +1329,8 @@ impl Executor {
 
             let mut file_actions: libc::posix_spawn_file_actions_t = unsafe { std::mem::zeroed() };
             let mut attr: libc::posix_spawnattr_t = unsafe { std::mem::zeroed() };
+            let mut redir_files: Vec<File> = Vec::new();
+            let mut owned_fds: Vec<RawFd> = Vec::new();
             unsafe {
                 libc::posix_spawn_file_actions_init(&mut file_actions);
                 libc::posix_spawnattr_init(&mut attr);
@@ -1007,28 +1338,37 @@ impl Executor {
                     match r.kind {
                         RedirKind::Output | RedirKind::OutputFd | RedirKind::Clobber => {
                             if let Ok(file) = File::create(&r.target) {
-                                libc::posix_spawn_file_actions_adddup2(&mut file_actions, file.as_raw_fd(), libc::STDOUT_FILENO);
+                                let fd = file.as_raw_fd();
+                                libc::fcntl(fd, libc::F_SETFD, libc::FD_CLOEXEC);
+                                libc::posix_spawn_file_actions_adddup2(&mut file_actions, fd, libc::STDOUT_FILENO);
                                 if matches!(r.kind, RedirKind::OutputFd | RedirKind::Clobber) {
-                                    libc::posix_spawn_file_actions_adddup2(&mut file_actions, file.as_raw_fd(), libc::STDERR_FILENO);
+                                    libc::posix_spawn_file_actions_adddup2(&mut file_actions, fd, libc::STDERR_FILENO);
                                 }
+                                redir_files.push(file);
                             }
                         }
                         RedirKind::OutputAppend | RedirKind::OutputFdAppend => {
                             if let Ok(file) = OpenOptions::new().create(true).append(true).open(&r.target) {
-                                libc::posix_spawn_file_actions_adddup2(&mut file_actions, file.as_raw_fd(), libc::STDOUT_FILENO);
+                                let fd = file.as_raw_fd();
+                                libc::fcntl(fd, libc::F_SETFD, libc::FD_CLOEXEC);
+                                libc::posix_spawn_file_actions_adddup2(&mut file_actions, fd, libc::STDOUT_FILENO);
                                 if matches!(r.kind, RedirKind::OutputFdAppend) {
-                                    libc::posix_spawn_file_actions_adddup2(&mut file_actions, file.as_raw_fd(), libc::STDERR_FILENO);
+                                    libc::posix_spawn_file_actions_adddup2(&mut file_actions, fd, libc::STDERR_FILENO);
                                 }
+                                redir_files.push(file);
                             }
                         }
                         RedirKind::Input | RedirKind::InputFd => {
-                            let fd = if let RedirKind::InputFd = r.kind {
-                                r.target.parse::<i32>().unwrap_or(-1)
-                            } else {
-                                File::open(&r.target).map(|f| f.as_raw_fd()).unwrap_or(-1)
-                            };
-                            if fd >= 0 {
+                            if let RedirKind::InputFd = r.kind {
+                                let fd = r.target.parse::<i32>().unwrap_or(-1);
+                                if fd >= 0 {
+                                    libc::posix_spawn_file_actions_adddup2(&mut file_actions, fd, libc::STDIN_FILENO);
+                                }
+                            } else if let Ok(file) = File::open(&r.target) {
+                                let fd = file.as_raw_fd();
+                                libc::fcntl(fd, libc::F_SETFD, libc::FD_CLOEXEC);
                                 libc::posix_spawn_file_actions_adddup2(&mut file_actions, fd, libc::STDIN_FILENO);
+                                redir_files.push(file);
                             }
                         }
                         _ => {}
@@ -1048,6 +1388,13 @@ impl Executor {
                     env_ptrs.as_ptr(),
                 )
             };
+            for f in &redir_files {
+                owned_fds.push(f.as_raw_fd());
+            }
+            drop(redir_files);
+            for fd in &owned_fds {
+                unsafe { libc::close(*fd); }
+            }
             unsafe {
                 libc::posix_spawn_file_actions_destroy(&mut file_actions);
                 libc::posix_spawnattr_destroy(&mut attr);
@@ -1169,7 +1516,6 @@ impl Executor {
         match unsafe { libc::fork() } {
             -1 => { eprintln!("context: fork failed"); }
             0 => {
-                self.fork_count.fetch_add(1, Ordering::SeqCst);
                 unsafe {
                     libc::setsid();
                     libc::signal(libc::SIGHUP, libc::SIG_IGN);
@@ -1177,16 +1523,37 @@ impl Executor {
                     libc::dup2(devnull, libc::STDIN_FILENO);
                     libc::close(devnull);
                 }
+                for r in redirects {
+                    self.apply_redirect(r);
+                }
                 self.child_exec(words, redirects, &path);
             }
             pid => {
                 self.fork_count.fetch_add(1, Ordering::SeqCst);
                 self.kill_after_timeout(pid, self.cfg.execution.timeout_seconds);
                 let fork_count_clone = Arc::clone(&self.fork_count);
+                let notify = self.opt_is("_OPT_B");
+                let job_cmd = words.join(" ");
+                let done_msg = self.cfg.jobs.done_format.expand(&[
+                    ("command", &job_cmd),
+                    ("pid", &pid.to_string()),
+                ]);
                 std::thread::spawn(move || {
                     let mut status: i32 = 0;
-                    unsafe { libc::waitpid(pid, &mut status, 0); }
+                    loop {
+                        let ret = unsafe { libc::waitpid(pid, &mut status, 0) };
+                        if ret != -1 || std::io::Error::last_os_error().raw_os_error() != Some(libc::EINTR) {
+                            break;
+                        }
+                    }
                     fork_count_clone.fetch_sub(1, Ordering::SeqCst);
+                    if notify {
+                        let exit = if libc::WIFEXITED(status) { libc::WEXITSTATUS(status) }
+                                   else if libc::WIFSIGNALED(status) { 128 + libc::WTERMSIG(status) }
+                                   else { 1 };
+                        let msg = done_msg.replace("{exit_code}", &exit.to_string());
+                        eprintln!("{}", msg);
+                    }
                 });
                 signals::BACKGROUND_PID.store(pid, std::sync::atomic::Ordering::SeqCst);
                 self.env.set("!", &pid.to_string());
@@ -1236,7 +1603,12 @@ impl Executor {
         c_ptrs.push(std::ptr::null());
         let c_cmd = CString::new(path).unwrap_or_else(|_| CString::new("sh").expect("failed to create CString for sh"));
         unsafe { libc::execvp(c_cmd.as_ptr(), c_ptrs.as_ptr()); }
-        std::process::exit(126);
+        let err = std::io::Error::last_os_error().raw_os_error().unwrap_or(0);
+        if err == libc::ENOENT {
+            unsafe { libc::_exit(127); }
+        } else {
+            unsafe { libc::_exit(126); }
+        }
     }
 
     fn kill_after_timeout(&self, pid: i32, timeout_secs: u32) {
@@ -1247,8 +1619,12 @@ impl Executor {
                 let mut status: i32 = 0;
                 let ret = libc::waitpid(pid, &mut status, libc::WNOHANG);
                 if ret == 0 {
-                    eprintln!("context: command timed out after {}s, sending SIGKILL", timeout_secs);
-                    libc::kill(pid, libc::SIGKILL);
+                    let mut status2: i32 = 0;
+                    let ret2 = libc::waitpid(pid, &mut status2, libc::WNOHANG);
+                    if ret2 == 0 {
+                        eprintln!("context: command timed out after {}s, sending SIGKILL", timeout_secs);
+                        libc::kill(pid, libc::SIGKILL);
+                    }
                 }
             }
         });
@@ -1277,6 +1653,8 @@ impl Executor {
             128 + libc::WTERMSIG(status)
         } else if libc::WIFSTOPPED(status) {
             128 + libc::WSTOPSIG(status)
+        } else if libc::WIFCONTINUED(status) {
+            0
         } else {
             1
         }
@@ -1284,9 +1662,9 @@ impl Executor {
 
     fn cleanup_jobs(&mut self) {
         self.jobs.retain(|job| {
-            if !job.running { return true; }
             let mut status: i32 = 0;
-            let ret = unsafe { libc::waitpid(job.pid, &mut status, libc::WNOHANG) };
+            let flags = if job.running { libc::WNOHANG } else { libc::WNOHANG | libc::WUNTRACED };
+            let ret = unsafe { libc::waitpid(job.pid, &mut status, flags) };
             if ret > 0
                 && (libc::WIFEXITED(status) || libc::WIFSIGNALED(status)) {
                     return false;
@@ -1300,7 +1678,7 @@ impl Executor {
             RedirKind::Output | RedirKind::OutputAppend | RedirKind::OutputFd
             | RedirKind::OutputFdAppend | RedirKind::Clobber | RedirKind::RedirectFd => libc::STDOUT_FILENO as u32,
             RedirKind::Input | RedirKind::InputFd | RedirKind::HereDocBody(_, _)
-            | RedirKind::HereString(_) => libc::STDIN_FILENO as u32,
+            | RedirKind::HereString(_) | RedirKind::RedirectOpen => libc::STDIN_FILENO as u32,
         }) as i32;
         match redirect.kind {
             RedirKind::Output => {
@@ -1309,32 +1687,41 @@ impl Executor {
                     return false;
                 }
                 if let Ok(file) = File::create(&redirect.target) {
-                    unsafe { libc::dup2(file.as_raw_fd(), target_fd); }
+                    unsafe {
+                        libc::fcntl(file.as_raw_fd(), libc::F_SETFD, libc::FD_CLOEXEC);
+                        libc::dup2(file.as_raw_fd(), target_fd);
+                    }
                 }
             }
             RedirKind::OutputAppend => {
                 if let Ok(file) = OpenOptions::new().create(true).append(true).open(&redirect.target) {
-                    unsafe { libc::dup2(file.as_raw_fd(), target_fd); }
+                    unsafe {
+                        libc::fcntl(file.as_raw_fd(), libc::F_SETFD, libc::FD_CLOEXEC);
+                        libc::dup2(file.as_raw_fd(), target_fd);
+                    }
                 }
             }
             RedirKind::Input => {
                 if let Ok(file) = File::open(&redirect.target) {
-                    unsafe { libc::dup2(file.as_raw_fd(), target_fd); }
+                    unsafe {
+                        libc::fcntl(file.as_raw_fd(), libc::F_SETFD, libc::FD_CLOEXEC);
+                        libc::dup2(file.as_raw_fd(), target_fd);
+                    }
                 }
             }
             RedirKind::OutputFd => {
                 if let Ok(file) = File::create(&redirect.target) {
                     unsafe {
+                        libc::fcntl(file.as_raw_fd(), libc::F_SETFD, libc::FD_CLOEXEC);
                         libc::dup2(file.as_raw_fd(), target_fd);
-                        libc::dup2(file.as_raw_fd(), libc::STDERR_FILENO);
                     }
                 }
             }
             RedirKind::OutputFdAppend => {
                 if let Ok(file) = OpenOptions::new().create(true).append(true).open(&redirect.target) {
                     unsafe {
+                        libc::fcntl(file.as_raw_fd(), libc::F_SETFD, libc::FD_CLOEXEC);
                         libc::dup2(file.as_raw_fd(), target_fd);
-                        libc::dup2(file.as_raw_fd(), libc::STDERR_FILENO);
                     }
                 }
             }
@@ -1375,7 +1762,10 @@ impl Executor {
             }
             RedirKind::Clobber => {
                 if let Ok(file) = File::create(&redirect.target) {
-                    unsafe { libc::dup2(file.as_raw_fd(), target_fd); }
+                    unsafe {
+                        libc::fcntl(file.as_raw_fd(), libc::F_SETFD, libc::FD_CLOEXEC);
+                        libc::dup2(file.as_raw_fd(), target_fd);
+                    }
                 }
             }
             RedirKind::InputFd => {
@@ -1383,6 +1773,22 @@ impl Executor {
                     unsafe { libc::close(target_fd); }
                 } else if let Ok(fd) = redirect.target.parse::<i32>() {
                     unsafe { libc::dup2(fd, target_fd); }
+                }
+            }
+            RedirKind::RedirectOpen => {
+                if let Ok(c_target) = CString::new(redirect.target.as_str()) {
+                    unsafe {
+                        let fd = libc::open(
+                            c_target.as_ptr(),
+                            libc::O_RDWR | libc::O_CREAT,
+                            0o666,
+                        );
+                        if fd >= 0 {
+                            libc::fcntl(fd, libc::F_SETFD, libc::FD_CLOEXEC);
+                            libc::dup2(fd, target_fd);
+                            libc::close(fd);
+                        }
+                    }
                 }
             }
         }
@@ -1449,36 +1855,43 @@ impl Executor {
         result
     }
 
-    fn expand_globs(&self, words: &[String]) -> Vec<String> {
+    fn expand_globs(&self, words: &[String]) -> (Vec<String>, i32) {
         if self.opt_g() {
-            return words.to_vec();
+            return (words.to_vec(), 0);
         }
+        let dotglob = self.env.get("_SHOPT_DOTGLOB").map(|s| s == "1").unwrap_or(false);
+        let nullglob = self.env.get("_SHOPT_NULLGLOB").map(|s| s == "1").unwrap_or(false);
+        let failglob = self.env.get("_SHOPT_FAILGLOB").map(|s| s == "1").unwrap_or(false);
+        let globstar = self.env.get("_SHOPT_GLOBSTAR").map(|s| s == "1").unwrap_or(false);
         let mut result = Vec::new();
+        let mut fail = false;
         for word in words {
             let expanded = expand_braces(word);
             for w in expanded {
                 if has_glob_chars(&w) {
-                    match glob::glob(&w) {
-                        Ok(paths) => {
-                            let mut matches: Vec<String> = paths
-                                .filter_map(|e| e.ok())
-                                .map(|p| p.to_string_lossy().to_string())
-                                .collect();
-                            if matches.is_empty() {
-                                result.push(w);
-                            } else {
-                                matches.sort();
-                                result.extend(matches);
-                            }
+                    let matches = if globstar && w.contains("**") {
+                        globstar_expand(&w, dotglob)
+                    } else {
+                        glob_expand_with(&w, dotglob)
+                    };
+                    if matches.is_empty() {
+                        if failglob {
+                            eprintln!("context: {}: no match", w);
+                            fail = true;
+                        } else if !nullglob {
+                            result.push(w);
                         }
-                        Err(_) => { result.push(w); }
+                    } else {
+                        let mut sorted = matches;
+                        sorted.sort();
+                        result.extend(sorted);
                     }
                 } else {
                     result.push(w);
                 }
             }
         }
-        result
+        if fail { (Vec::new(), 1) } else { (result, 0) }
     }
 
     fn source_file(&mut self, path: &str) -> i32 {
@@ -1489,9 +1902,13 @@ impl Executor {
                 return 1;
             }
         };
+        SOURCE_STACK.lock().unwrap().push(path.to_string());
+        crate::shell::expand::CURRENT_LINE.store(1, std::sync::atomic::Ordering::Relaxed);
         let tokens = crate::shell::lexer::tokenize(&contents);
         let ast = crate::shell::parser::parse(tokens);
-        self.execute(&ast)
+        let status = self.execute(&ast);
+        SOURCE_STACK.lock().unwrap().pop();
+        status
     }
 
     fn find_in_path(&self, cmd: &str) -> Option<String> {
@@ -1508,57 +1925,6 @@ impl Executor {
             }
         }
         None
-    }
-
-    fn cmd_enable(&mut self, args: &[String]) -> i32 {
-        if args.is_empty() {
-            let all = [
-                ":", "cd", "exit", "export", "unset", "alias", "unalias",
-                "source", ".", "history", "set", "unsetenv", "env",
-                "pwd", "type", "which", "echo", "printf", "true",
-                "false", "test", "[", "let", "exec", "trap",
-                "pushd", "popd", "dirs", "hash", "math", "regexmatch", "module",
-                "readonly", "builtin", "shopt",
-                "declare", "typeset", "local",
-                "caller", "jobs", "fg", "bg",
-                "wait", "kill", "umask", "command", "eval",
-                "select", "getopts", "realpath", "complete", "compgen", "read",
-                "shift", "bindkey"
-            ];
-            for name in &all {
-                let status = if self.disabled_builtins.contains(*name) { "off" } else { "on" };
-                println!("{}={}", name, status);
-            }
-            return 0;
-        }
-        let mut i = 0;
-        let mut disable = false;
-        while i < args.len() {
-            if args[i] == "-n" {
-                disable = true;
-                i += 1;
-            } else if args[i].starts_with('-') && args[i] != "-n" {
-                eprintln!("context: enable: unknown option: {}", args[i]);
-                return 1;
-            } else {
-                break;
-            }
-        }
-        if i >= args.len() {
-            eprintln!("context: enable: requires a builtin name");
-            return 1;
-        }
-        let name = &args[i];
-        if !builtin_is(name) {
-            eprintln!("context: enable: {}: not a builtin", name);
-            return 1;
-        }
-        if disable {
-            self.disabled_builtins.insert(name.to_string());
-        } else {
-            self.disabled_builtins.remove(name);
-        }
-        0
     }
 
     fn audit_log(&self, cmd: &str) {
@@ -1591,6 +1957,15 @@ impl Executor {
     fn opt_g(&self) -> bool { self.opt_is("_OPT_G") }
     fn opt_pipefail(&self) -> bool { self.opt_is("_OPT_PIPEFAIL") }
 
+    pub fn run_exit_trap(&mut self) {
+        if let Some(cmd) = self.env.get_trap("EXIT").map(|s| s.to_string())
+            && !cmd.is_empty() {
+                let tokens = crate::shell::lexer::tokenize(&cmd);
+                let ast = crate::shell::parser::parse(tokens);
+                self.execute(&ast);
+            }
+    }
+
     fn trace_print(&self, words: &[String]) {
         if self.opt_x() {
             let ps4 = self.env.get("PS4").unwrap_or("+ ");
@@ -1598,6 +1973,77 @@ impl Executor {
             eprintln!("{}{}", ps4, cmd_str.join(" "));
         }
     }
+}
+
+fn setup_process_sub(raw_words: &[String]) -> (Vec<String>, Vec<i32>) {
+    let mut result = Vec::new();
+    let mut child_pids = Vec::new();
+    for word in raw_words {
+        if let Some(inner) = word.strip_prefix("<(").and_then(|s| s.strip_suffix(')')) {
+            let mut fds = [0i32; 2];
+            unsafe { libc::pipe(fds.as_mut_ptr()); }
+            let (read_fd, write_fd) = (fds[0], fds[1]);
+            match unsafe { libc::fork() } {
+                -1 => {
+                    unsafe { libc::close(read_fd); libc::close(write_fd); }
+                    result.push(word.clone());
+                }
+                0 => {
+                    unsafe {
+                        libc::close(read_fd);
+                        libc::dup2(write_fd, libc::STDOUT_FILENO);
+                        libc::close(write_fd);
+                        signals::setup_child_handlers();
+                    }
+                    let tokens = crate::shell::lexer::tokenize(inner);
+                    let ast = crate::shell::parser::parse(tokens);
+                    let mut exec = Executor::new(Env::new(), Config::default());
+                    let status = exec.execute(&ast);
+                    unsafe { libc::_exit(status); }
+                }
+                pid => {
+                    unsafe {
+                        libc::close(write_fd);
+                    }
+                    child_pids.push(pid);
+                    result.push(format!("/dev/fd/{}", read_fd));
+                }
+            }
+        } else if let Some(inner) = word.strip_prefix(">(").and_then(|s| s.strip_suffix(')')) {
+            let mut fds = [0i32; 2];
+            unsafe { libc::pipe(fds.as_mut_ptr()); }
+            let (read_fd, write_fd) = (fds[0], fds[1]);
+            match unsafe { libc::fork() } {
+                -1 => {
+                    unsafe { libc::close(read_fd); libc::close(write_fd); }
+                    result.push(word.clone());
+                }
+                0 => {
+                    unsafe {
+                        libc::close(write_fd);
+                        libc::dup2(read_fd, libc::STDIN_FILENO);
+                        libc::close(read_fd);
+                        signals::setup_child_handlers();
+                    }
+                    let tokens = crate::shell::lexer::tokenize(inner);
+                    let ast = crate::shell::parser::parse(tokens);
+                    let mut exec = Executor::new(Env::new(), Config::default());
+                    let status = exec.execute(&ast);
+                    unsafe { libc::_exit(status); }
+                }
+                pid => {
+                    unsafe {
+                        libc::close(read_fd);
+                    }
+                    child_pids.push(pid);
+                    result.push(format!("/dev/fd/{}", write_fd));
+                }
+            }
+        } else {
+            result.push(word.clone());
+        }
+    }
+    (result, child_pids)
 }
 
 fn strip_markers(s: &str) -> String {
@@ -1617,7 +2063,8 @@ fn builtin_is(cmd: &str) -> bool {
         "wait" | "kill" | "umask" | "command" | "eval" |
         "select" | "getopts" | "realpath" | "complete" | "compgen" | "read" |
         "return" | "shift" |
-        "bindkey" | "break" | "continue"
+        "bindkey" | "break" | "continue" |
+        "fc" | "disown"
     )
 }
 
@@ -1677,6 +2124,95 @@ fn split_brace_alternatives(s: &str) -> Vec<String> {
 
 fn has_glob_chars(s: &str) -> bool {
     s.contains('*') || s.contains('?') || s.contains('[')
+        || s.contains("+(") || s.contains("!(") || s.contains("@(")
+}
+
+fn glob_expand_with(pattern: &str, dotglob: bool) -> Vec<String> {
+    let options = glob::MatchOptions {
+        case_sensitive: true,
+        require_literal_separator: false,
+        require_literal_leading_dot: !dotglob,
+    };
+    match glob::glob_with(pattern, options) {
+        Ok(paths) => paths
+            .filter_map(|e| e.ok())
+            .map(|p| p.to_string_lossy().to_string())
+            .collect(),
+        Err(_) => Vec::new(),
+    }
+}
+
+fn globstar_expand(pattern: &str, dotglob: bool) -> Vec<String> {
+    let mut results = Vec::new();
+    let star_pos = match pattern.find("**") {
+        Some(p) => p,
+        None => return glob_expand_with(pattern, dotglob),
+    };
+    let base_str = pattern[..star_pos].trim_end_matches('/');
+    let base_path = if base_str.is_empty() {
+        std::path::PathBuf::from(".")
+    } else {
+        std::path::PathBuf::from(base_str)
+    };
+    if !base_path.is_dir() {
+        return Vec::new();
+    }
+    let after_star = &pattern[star_pos + 2..];
+    let suffix = after_star.strip_prefix('/').unwrap_or(after_star);
+    globstar_walk(&base_path, &base_path, suffix, dotglob, &mut results);
+    results
+}
+
+fn globstar_walk(root: &std::path::Path, dir: &std::path::Path, suffix: &str, dotglob: bool, results: &mut Vec<String>) {
+    let entries = match std::fs::read_dir(dir) {
+        Ok(rd) => rd,
+        Err(_) => return,
+    };
+    for entry in entries.flatten() {
+        let name = entry.file_name().to_string_lossy().to_string();
+        if !dotglob && name.starts_with('.') {
+            continue;
+        }
+        let path = entry.path();
+        if path.is_dir() {
+            globstar_walk(root, &path, suffix, dotglob, results);
+        }
+        if suffix.is_empty() {
+            if let Ok(rel) = path.strip_prefix(root) {
+                results.push(rel.to_string_lossy().to_string());
+            }
+            continue;
+        }
+        let options = glob::MatchOptions {
+            case_sensitive: true,
+            require_literal_separator: false,
+            require_literal_leading_dot: !dotglob,
+        };
+        let matched = if !suffix.contains('/') {
+            let file_name = path.file_name().unwrap_or_default().to_string_lossy();
+            glob::Pattern::new(suffix)
+                .ok()
+                .map(|p| p.matches_with(&file_name, options))
+                .unwrap_or(false)
+        } else {
+            if let Ok(rel) = path.strip_prefix(root) {
+                let rel_str = rel.to_string_lossy();
+                glob::Pattern::new(suffix)
+                    .ok()
+                    .map(|p| p.matches_with(&rel_str, options))
+                    .unwrap_or(false)
+            } else {
+                false
+            }
+        };
+        if matched {
+            if let Ok(rel) = path.strip_prefix(root) {
+                results.push(rel.to_string_lossy().to_string());
+            } else {
+                results.push(path.to_string_lossy().to_string());
+            }
+        }
+    }
 }
 
 fn glob_match(pattern: &str, text: &str) -> bool {
@@ -1782,143 +2318,125 @@ fn eval_test_bracket(tokens: &[String]) -> i32 {
 }
 
 fn eval_test_or(tokens: &[String]) -> bool {
-    let mut left = eval_test_and(tokens);
-    let mut i = 0;
-    while i < tokens.len() {
-        if tokens[i] == "||" {
-            i += 1;
-            let right = eval_test_and(&tokens[i..]);
-            left = left || right;
-            while i < tokens.len() && tokens[i] != "||" && tokens[i] != "&&" { i += 1; }
-        } else if tokens[i] == "&&" {
-            i += 1;
-            let right = eval_test_and(&tokens[i..]);
-            left = left && right;
-            while i < tokens.len() && tokens[i] != "||" && tokens[i] != "&&" { i += 1; }
-        } else {
-            i += 1;
-        }
+    let mut pos = 0;
+    let (mut left, next) = eval_test_and_at(tokens, pos);
+    pos = next;
+    while pos < tokens.len() && tokens[pos] == "||" {
+        pos += 1;
+        let (right, next) = eval_test_and_at(tokens, pos);
+        left = left || right;
+        pos = next;
     }
     left
 }
 
-fn eval_test_and(tokens: &[String]) -> bool {
-    let mut left = eval_test_primary(tokens);
-    let mut i = 0;
-    while i < tokens.len() {
-        if tokens[i] == "&&" {
-            i += 1;
-            let right = eval_test_primary(&tokens[i..]);
-            left = left && right;
-            while i < tokens.len() && tokens[i] != "||" && tokens[i] != "&&" { i += 1; }
-        } else {
-            i += 1;
-        }
+fn eval_test_and_at(tokens: &[String], start: usize) -> (bool, usize) {
+    let (mut left, mut pos) = eval_test_primary_at(tokens, start);
+    while pos < tokens.len() && tokens[pos] == "&&" {
+        pos += 1;
+        let (right, next) = eval_test_primary_at(tokens, pos);
+        left = left && right;
+        pos = next;
     }
-    left
+    (left, pos)
 }
 
-fn eval_test_primary(tokens: &[String]) -> bool {
-    if tokens.is_empty() {
-        return false;
+fn eval_test_primary_at(tokens: &[String], start: usize) -> (bool, usize) {
+    if start >= tokens.len() {
+        return (false, start);
     }
-    if tokens[0] == "!" {
-        return !eval_test_primary(&tokens[1..]);
+    if tokens[start] == "!" {
+        let (val, next) = eval_test_primary_at(tokens, start + 1);
+        return (!val, next);
     }
-    if tokens[0] == "("
-        && let Some(close) = find_matching_paren(tokens) {
-            let inner = &tokens[1..close];
-            let result = eval_test_or(inner);
-            return result;
-        }
-    if tokens.len() >= 2 {
-        let op = &tokens[0];
-        if op == "-f" { return std::path::Path::new(&tokens[1]).is_file(); }
-        if op == "-d" { return std::path::Path::new(&tokens[1]).is_dir(); }
-        if op == "-e" { return std::path::Path::new(&tokens[1]).exists(); }
+    if tokens[start] == "(" {
+        let (val, next) = eval_test_or_at(tokens, start + 1);
+        let next = if next < tokens.len() && tokens[next] == ")" { next + 1 } else { next };
+        return (val, next);
+    }
+    if start + 1 < tokens.len() {
+        let op = &tokens[start];
+        if op == "-f" { return (std::path::Path::new(&tokens[start + 1]).is_file(), start + 2); }
+        if op == "-d" { return (std::path::Path::new(&tokens[start + 1]).is_dir(), start + 2); }
+        if op == "-e" { return (std::path::Path::new(&tokens[start + 1]).exists(), start + 2); }
         if op == "-r" {
-            let c = std::ffi::CString::new(tokens[1].as_str()).unwrap_or_default();
-            return unsafe { libc::access(c.as_ptr(), libc::R_OK) == 0 };
+            let c = std::ffi::CString::new(tokens[start + 1].as_str()).unwrap_or_default();
+            return (unsafe { libc::access(c.as_ptr(), libc::R_OK) == 0 }, start + 2);
         }
         if op == "-w" {
-            let c = std::ffi::CString::new(tokens[1].as_str()).unwrap_or_default();
+            let c = std::ffi::CString::new(tokens[start + 1].as_str()).unwrap_or_default();
             let mut st: libc::stat = unsafe { std::mem::zeroed() };
             if unsafe { libc::stat(c.as_ptr(), &mut st) } == 0 {
                 let euid = unsafe { libc::geteuid() };
                 let egid = unsafe { libc::getegid() };
-                return if euid == 0 { true }
+                let r = if euid == 0 { true }
                 else if st.st_uid == euid { (st.st_mode & libc::S_IWUSR) != 0 }
                 else if st.st_gid == egid { (st.st_mode & libc::S_IWGRP) != 0 }
                 else { (st.st_mode & libc::S_IWOTH) != 0 };
+                return (r, start + 2);
             }
-            return false;
+            return (false, start + 2);
         }
         if op == "-x" {
-            let c = std::ffi::CString::new(tokens[1].as_str()).unwrap_or_default();
+            let c = std::ffi::CString::new(tokens[start + 1].as_str()).unwrap_or_default();
             let mut st: libc::stat = unsafe { std::mem::zeroed() };
             if unsafe { libc::stat(c.as_ptr(), &mut st) } == 0 {
                 let euid = unsafe { libc::geteuid() };
                 let egid = unsafe { libc::getegid() };
-                return if euid == 0 { true }
+                let r = if euid == 0 { true }
                 else if st.st_uid == euid { (st.st_mode & libc::S_IXUSR) != 0 }
                 else if st.st_gid == egid { (st.st_mode & libc::S_IXGRP) != 0 }
                 else { (st.st_mode & libc::S_IXOTH) != 0 };
+                return (r, start + 2);
             }
-            return false;
+            return (false, start + 2);
         }
-        if op == "-s" { return std::fs::metadata(&tokens[1]).map(|m| m.len() > 0).unwrap_or(false); }
-        if op == "-L" || op == "-h" { return std::path::Path::new(&tokens[1]).is_symlink(); }
-        if op == "-S" { return std::fs::metadata(&tokens[1]).map(|m| m.file_type().is_socket()).unwrap_or(false); }
-        if op == "-p" { return std::fs::metadata(&tokens[1]).map(|m| m.file_type().is_fifo()).unwrap_or(false); }
-        if op == "-c" { return std::fs::metadata(&tokens[1]).map(|m| m.file_type().is_char_device()).unwrap_or(false); }
-        if op == "-n" { return !tokens[1].is_empty(); }
-        if op == "-z" { return tokens[1].is_empty(); }
-        if op == "=" || op == "==" { return glob_match(&tokens[2], &tokens[1]); }
-        if op == "!=" { return !glob_match(&tokens[2], &tokens[1]); }
-        if op == "-eq" { return tokens[1].parse::<i64>().unwrap_or(0) == tokens[2].parse::<i64>().unwrap_or(0); }
-        if op == "-ne" { return tokens[1].parse::<i64>().unwrap_or(0) != tokens[2].parse::<i64>().unwrap_or(0); }
-        if op == "-lt" { return tokens[1].parse::<i64>().unwrap_or(0) < tokens[2].parse::<i64>().unwrap_or(0); }
-        if op == "-le" { return tokens[1].parse::<i64>().unwrap_or(0) <= tokens[2].parse::<i64>().unwrap_or(0); }
-        if op == "-gt" { return tokens[1].parse::<i64>().unwrap_or(0) > tokens[2].parse::<i64>().unwrap_or(0); }
-        if op == "-ge" { return tokens[1].parse::<i64>().unwrap_or(0) >= tokens[2].parse::<i64>().unwrap_or(0); }
-        if op == "=~" {
-            let pattern = &tokens[2];
-            if let Ok(re) = regex::Regex::new(pattern) {
-                return re.is_match(&tokens[1]);
-            }
-            return false;
-        }
+        if op == "-s" { return (std::fs::metadata(&tokens[start + 1]).map(|m| m.len() > 0).unwrap_or(false), start + 2); }
+        if op == "-L" || op == "-h" { return (std::path::Path::new(&tokens[start + 1]).is_symlink(), start + 2); }
+        if op == "-S" { return (std::fs::metadata(&tokens[start + 1]).map(|m| m.file_type().is_socket()).unwrap_or(false), start + 2); }
+        if op == "-p" { return (std::fs::metadata(&tokens[start + 1]).map(|m| m.file_type().is_fifo()).unwrap_or(false), start + 2); }
+        if op == "-c" { return (std::fs::metadata(&tokens[start + 1]).map(|m| m.file_type().is_char_device()).unwrap_or(false), start + 2); }
+        if op == "-n" { return (!tokens[start + 1].is_empty(), start + 2); }
+        if op == "-z" { return (tokens[start + 1].is_empty(), start + 2); }
     }
-    if tokens.len() >= 3 {
-        let a = &tokens[0];
-        let op = &tokens[1];
-        let b = &tokens[2];
-        if op == "==" || op == "=" { return glob_match(b, a); }
-        if op == "!=" { return !glob_match(b, a); }
+    if start + 2 < tokens.len() {
+        let a = &tokens[start];
+        let op = &tokens[start + 1];
+        let b = &tokens[start + 2];
+        if op == "==" || op == "=" { return (glob_match(b, a), start + 3); }
+        if op == "!=" { return (!glob_match(b, a), start + 3); }
         if op == "=~" {
             if let Ok(re) = regex::Regex::new(b) {
-                return re.is_match(a);
+                if let Some(caps) = re.captures(a) {
+                    let mut rematch = BASH_REMATCH.lock().unwrap();
+                    rematch.clear();
+                    for m in caps.iter() {
+                        rematch.push(m.map(|c| c.as_str().to_string()).unwrap_or_default());
+                    }
+                    return (true, start + 3);
+                }
+                return (false, start + 3);
             }
-            return false;
+            return (false, start + 3);
         }
-        if op == "-eq" { return a.parse::<i64>().unwrap_or(0) == b.parse::<i64>().unwrap_or(0); }
-        if op == "-ne" { return a.parse::<i64>().unwrap_or(0) != b.parse::<i64>().unwrap_or(0); }
-        if op == "-lt" { return a.parse::<i64>().unwrap_or(0) < b.parse::<i64>().unwrap_or(0); }
-        if op == "-le" { return a.parse::<i64>().unwrap_or(0) <= b.parse::<i64>().unwrap_or(0); }
-        if op == "-gt" { return a.parse::<i64>().unwrap_or(0) > b.parse::<i64>().unwrap_or(0); }
-        if op == "-ge" { return a.parse::<i64>().unwrap_or(0) >= b.parse::<i64>().unwrap_or(0); }
+        if op == "-eq" { return (a.parse::<i64>().unwrap_or(0) == b.parse::<i64>().unwrap_or(0), start + 3); }
+        if op == "-ne" { return (a.parse::<i64>().unwrap_or(0) != b.parse::<i64>().unwrap_or(0), start + 3); }
+        if op == "-lt" { return (a.parse::<i64>().unwrap_or(0) < b.parse::<i64>().unwrap_or(0), start + 3); }
+        if op == "-le" { return (a.parse::<i64>().unwrap_or(0) <= b.parse::<i64>().unwrap_or(0), start + 3); }
+        if op == "-gt" { return (a.parse::<i64>().unwrap_or(0) > b.parse::<i64>().unwrap_or(0), start + 3); }
+        if op == "-ge" { return (a.parse::<i64>().unwrap_or(0) >= b.parse::<i64>().unwrap_or(0), start + 3); }
     }
-    if tokens.len() == 1 {
-        return !tokens[0].is_empty();
-    }
-    false
+    (false, start + 1)
 }
 
-fn find_matching_paren(tokens: &[String]) -> Option<usize> {
-    let mut depth = 0;
-    for (i, t) in tokens.iter().enumerate() {
-        if t == "(" { depth += 1; }
-        if t == ")" { depth -= 1; if depth == 0 { return Some(i); } }
+fn eval_test_or_at(tokens: &[String], start: usize) -> (bool, usize) {
+    let (mut left, mut pos) = eval_test_and_at(tokens, start);
+    while pos < tokens.len() && tokens[pos] == "||" {
+        pos += 1;
+        let (right, next) = eval_test_and_at(tokens, pos);
+        left = left || right;
+        pos = next;
     }
-    None
+    (left, pos)
 }
+

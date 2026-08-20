@@ -148,6 +148,19 @@ fn main() {
     let mut command_to_run = opts.command.clone();
     let read_from_stdin = opts.stdin;
 
+    if opts.dry_run {
+        if let Some(ref cmd) = command_to_run {
+            eprintln!("ctx: dry run: {}", cmd);
+        } else if read_from_stdin {
+            eprintln!("ctx: dry run: reading from stdin");
+        } else if let Some(ref file) = opts.file {
+            eprintln!("ctx: dry run: {}", file);
+        } else {
+            eprintln!("ctx: dry run mode");
+        }
+        std::process::exit(0);
+    }
+
     if let Some(ref file) = opts.file {
         match std::fs::read_to_string(file) {
             Ok(contents) => {
@@ -197,6 +210,7 @@ fn main() {
                 Err(_) => break,
             }
         }
+        executor.run_exit_trap();
         executor.env.unset_all_traps();
         std::process::exit(last_status);
     }
@@ -218,11 +232,20 @@ fn main() {
         let ast = shell::parser::parse(tokens);
         let status = executor.execute(&ast);
 
+        executor.run_exit_trap();
         executor.env.unset_all_traps();
         std::process::exit(status);
     }
 
     let mut cfg = config::loader::load();
+
+    if let Some(ref kv) = opts.env_var
+        && let Some((k, v)) = kv.split_once('=') {
+            unsafe { std::env::set_var(k, v); }
+        }
+    if let Some(ref key) = opts.unset_var {
+        unsafe { std::env::remove_var(key); }
+    }
 
     if opts.no_color {
         cfg.display.color_mode = "0".into();
@@ -343,13 +366,6 @@ fn main() {
     if let Some(ref path) = opts.workdir {
         let _ = std::env::set_current_dir(path);
     }
-    if let Some(ref kv) = opts.env_var
-        && let Some((k, v)) = kv.split_once('=') {
-            unsafe { std::env::set_var(k, v); }
-        }
-    if let Some(ref key) = opts.unset_var {
-        unsafe { std::env::remove_var(key); }
-    }
     if opts.xtrace {
         cfg.editor.colorize_output = true;
     }
@@ -468,6 +484,34 @@ fn main() {
 
     let custom_keybindings = load_keybindings();
 
+    {
+        let cfg_leak: &'static Config = Box::leak(Box::new(cfg.clone()));
+        let kb = custom_keybindings.clone();
+        let _ = shell::builtin::READLINE_CB.set(Box::new(move |prompt: &str| {
+            let pd = terminal::prompt::PromptDisplay {
+                lines_above: vec![],
+                input_prefix: prompt.to_string(),
+                lines_below: vec![],
+                right_prompt: String::new(),
+                right_prompt_color: String::new(),
+                right_prompt_hide_threshold: 0.0,
+            };
+            terminal::editor::read_line_editor(
+                &pd,
+                &[],
+                &cfg_leak.editor,
+                &cfg_leak.autosuggest,
+                &cfg_leak.history,
+                &cfg_leak.clipboard,
+                &cfg_leak.cursor,
+                &cfg_leak.prompt,
+                &cfg_leak.colors,
+                &cfg_leak.symbols,
+                &kb,
+            )
+        }));
+    }
+
     let mut running = true;
     while running {
         let trap_sig = signals::TRAP_SIGNAL.swap(0, Ordering::SeqCst);
@@ -504,8 +548,18 @@ fn main() {
 
         if signals::RELOAD_CONFIG.load(Ordering::SeqCst) {
             signals::RELOAD_CONFIG.store(false, Ordering::SeqCst);
-            cfg = config::loader::load();
-            executor.cfg = cfg.clone();
+            let sig1_cmd = signals::SIGUSR1_CUSTOM_CMD.lock().ok().and_then(|g| g.clone());
+            let sig2_cmd = signals::SIGUSR2_CUSTOM_CMD.lock().ok().and_then(|g| g.clone());
+            if let Some(cmd) = sig1_cmd.or(sig2_cmd) {
+                if !cmd.is_empty() {
+                    let tokens = shell::lexer::tokenize(&cmd);
+                    let ast = shell::parser::parse(tokens);
+                    executor.execute(&ast);
+                }
+            } else {
+                cfg = config::loader::load();
+                executor.cfg = cfg.clone();
+            }
         }
 
         if cfg.history.share_across_sessions {
@@ -568,10 +622,42 @@ fn main() {
             }
         }
 
-        if !cfg.branding.shell_name.is_empty() {
+        if cfg.display.title_bar {
+            let cwd = executor.env.get("PWD").unwrap_or("~");
+            let user = executor.env.get("USER").unwrap_or("user");
+            let host = executor.env.get("HOSTNAME").unwrap_or("localhost");
+            let title = cfg.display.title_bar_format.expand(&[
+                ("cwd", cwd),
+                ("user", user),
+                ("host", host),
+            ]);
+            print!("\x1b]0;{}\x07", title);
+            let _ = io::stdout().flush();
+        } else if !cfg.branding.shell_name.is_empty() {
             let cwd = executor.env.get("PWD").unwrap_or("~");
             print!("\x1b]0;{} — {}\x07", cfg.branding.shell_name, cwd);
             let _ = io::stdout().flush();
+        }
+
+        if cfg.display.status_line {
+            let cwd = executor.env.get("PWD").unwrap_or("~");
+            let exit_code = executor.last_status.to_string();
+            let line = cfg.display.status_line_format.expand(&[
+                ("cwd", cwd),
+                ("exit_code", &exit_code),
+                ("pid", &std::process::id().to_string()),
+            ]);
+            eprintln!("{}", line);
+            let _ = io::stderr().flush();
+        }
+        if cfg.display.show_session_info {
+            let cwd = executor.env.get("PWD").unwrap_or("~");
+            let info = cfg.display.session_info_format.expand(&[
+                ("cwd", cwd),
+                ("version", &cfg.branding.version),
+            ]);
+            eprintln!("{}", info);
+            let _ = io::stderr().flush();
         }
 
         if cfg.prompt.instant_prompt {
@@ -620,12 +706,24 @@ fn main() {
                     }
                 }
 
+                prompt::set_hist_count(history.len());
+                prompt::COMMAND_COUNT.fetch_add(1, Ordering::Relaxed);
+
                 let tokens = shell::lexer::tokenize(&line);
                 let ast = shell::parser::parse(tokens);
                 let mut event_data = std::collections::HashMap::new();
                 event_data.insert("command".into(), line.clone());
                 py_engine.plugins.fire("on_preexec", &event_data);
                 let cmd_start = std::time::Instant::now();
+                if let Some(ps0) = executor.env.get("PS0").map(|s| s.to_string())
+                    && !ps0.is_empty() {
+                        let bg_pid = signals::BACKGROUND_PID.load(Ordering::SeqCst);
+                        let mut expander = shell::expand::Expander::new(&mut executor.env, executor.last_status, vec![], bg_pid);
+                        let expanded = expander.expand_word(&ps0);
+                        drop(expander);
+                        eprint!("{}", expanded);
+                        let _ = io::stderr().flush();
+                    }
                 let status = executor.execute(&ast);
                 let cmd_duration = cmd_start.elapsed();
 
@@ -700,6 +798,7 @@ fn main() {
     }
 
     py_engine.plugins.fire("on_exit", &std::collections::HashMap::new());
+    executor.run_exit_trap();
     cleanup(&history_path, &history, known_lines, &cfg, &mut executor.env);
 }
 
@@ -776,47 +875,36 @@ fn sync_history(path: &std::path::Path, history: &mut Vec<String>, known_lines: 
         Err(_) => return,
     };
     let reader = BufReader::new(file);
-    let all_lines: Vec<String> = reader.lines()
-        .map_while(Result::ok)
-        .filter(|l| !l.is_empty())
-        .collect();
-    let file_len = all_lines.len();
-    if file_len > *known_lines {
-        let new_entries = &all_lines[*known_lines..];
-        for entry in new_entries {
-            if history.last().map(|s| s != entry).unwrap_or(true) {
-                history.push(entry.clone());
-            }
-        }
+    let mut line_count = 0usize;
+    for line in reader.lines() {
+        line_count += 1;
+        if line_count > *known_lines
+            && let Ok(entry) = line
+                && !entry.is_empty() && history.last().map(|s| s != &entry).unwrap_or(true) {
+                    history.push(entry);
+                }
     }
-    *known_lines = file_len;
+    *known_lines = line_count;
 }
 
-fn append_history(path: &std::path::Path, history: &[String], cfg: &Config) -> io::Result<()> {
-    let max = cfg.history.max_size as usize;
-    let entries = if history.len() > max {
-        &history[history.len() - max..]
-    } else {
-        history
-    };
+fn append_history(path: &std::path::Path, history: &[String], _cfg: &Config) -> io::Result<()> {
+    if let Some(entry) = history.last() {
+        let file = OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(path)?;
 
-    let file = OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(path)?;
+        unsafe {
+            libc::flock(file.as_raw_fd() as libc::c_int, libc::LOCK_EX);
+        }
 
-    unsafe {
-        libc::flock(file.as_raw_fd() as libc::c_int, libc::LOCK_EX);
-    }
-
-    let mut writer = io::BufWriter::new(&file);
-    for entry in entries {
+        let mut writer = io::BufWriter::new(&file);
         writeln!(writer, "{}", entry)?;
-    }
-    writer.flush()?;
+        writer.flush()?;
 
-    unsafe {
-        libc::flock(file.as_raw_fd() as libc::c_int, libc::LOCK_UN);
+        unsafe {
+            libc::flock(file.as_raw_fd() as libc::c_int, libc::LOCK_UN);
+        }
     }
 
     Ok(())
@@ -1185,7 +1273,7 @@ fn print_help() {
     eprintln!("  -l, --license            Show license information");
     eprintln!("  -a, --authors            Show authors");
     eprintln!();
-    eprintln!("Excution:");
+    eprintln!("Execution:");
     eprintln!("  -c, --command [CMD]          Execute CMD as a command string, then exit");
     eprintln!("  -s, --stdin                  Read commands from standard input, then exit");
     eprintln!("  -f, --file [FILE]            Read and execute commands from a file, then exit");

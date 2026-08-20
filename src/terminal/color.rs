@@ -68,10 +68,13 @@ fn hex_to_ansi_16(hex: &str) -> String {
     let g = u8::from_str_radix(&hex[2..4], 16).unwrap_or(0);
     let b = u8::from_str_radix(&hex[4..6], 16).unwrap_or(0);
 
-    let ri = if r > 127 { 1 } else { 0 };
-    let gi = if g > 127 { 1 } else { 0 };
-    let bi = if b > 127 { 1 } else { 0 };
-    let idx = ri * 4 + gi * 2 + bi + 30;
+    let mut idx = 30;
+    if r > 128 { idx += 1; }
+    if g > 128 { idx += 2; }
+    if b > 128 { idx += 4; }
+    if idx == 30 && (r > 30 || g > 30 || b > 30) {
+        idx = 37;
+    }
     format!("\x1b[{}m", idx)
 }
 
@@ -126,10 +129,13 @@ pub fn hex_to_ansi_bg(hex: &str) -> String {
         }
         2 => {
             let (r, g, b) = parse_hex_rgb(hex);
-            let ri = if r > 127 { 1 } else { 0 };
-            let gi = if g > 127 { 1 } else { 0 };
-            let bi = if b > 127 { 1 } else { 0 };
-            let idx = ri * 4 + gi * 2 + bi + 100;
+            let mut idx = 40;
+            if r > 128 { idx += 1; }
+            if g > 128 { idx += 2; }
+            if b > 128 { idx += 4; }
+            if idx == 40 && (r > 30 || g > 30 || b > 30) {
+                idx = 47;
+            }
             format!("\x1b[{}m", idx)
         }
         _ => String::new(),
@@ -153,10 +159,13 @@ pub fn gradient_color(start_hex: &str, end_hex: &str, t: f64) -> String {
             format!("\x1b[38;5;{}m", idx)
         }
         2 => {
-            let ri = if r > 127 { 1 } else { 0 };
-            let gi = if g > 127 { 1 } else { 0 };
-            let bi = if b > 127 { 1 } else { 0 };
-            let idx = ri * 4 + gi * 2 + bi + 30;
+            let mut idx = 30;
+            if r > 128 { idx += 1; }
+            if g > 128 { idx += 2; }
+            if b > 128 { idx += 4; }
+            if idx == 30 && (r > 30 || g > 30 || b > 30) {
+                idx = 37;
+            }
             format!("\x1b[{}m", idx)
         }
         _ => String::new(),
@@ -222,9 +231,22 @@ pub fn strip_ansi(s: &str) -> String {
     let mut chars = s.chars();
     while let Some(c) = chars.next() {
         if c == '\x1b' {
-            if chars.next() == Some('[') {
-                for c in chars.by_ref() {
-                    if c.is_ascii_alphabetic() { break; }
+            if let Some(next) = chars.next() {
+                if next == '[' {
+                    for c in chars.by_ref() {
+                        if c.is_ascii_alphabetic() { break; }
+                    }
+                } else if next == ']' {
+                    let mut prev = ']';
+                    for c in chars.by_ref() {
+                        if c == '\x07' {
+                            break;
+                        }
+                        if prev == '\x1b' && c == '\\' {
+                            break;
+                        }
+                        prev = c;
+                    }
                 }
             }
         } else {
@@ -234,8 +256,40 @@ pub fn strip_ansi(s: &str) -> String {
     result
 }
 
+fn is_wide_char(cp: u32) -> bool {
+    (0x4E00..=0x9FFF).contains(&cp)
+        || (0x3000..=0x303F).contains(&cp)
+        || (0xFF00..=0xFFEF).contains(&cp)
+        || (0x3040..=0x309F).contains(&cp)
+        || (0x30A0..=0x30FF).contains(&cp)
+        || (0xAC00..=0xD7AF).contains(&cp)
+}
+
 pub fn visible_len(text: &str) -> usize {
-    strip_ansi(text).chars().count()
+    let mut len = 0;
+    let mut chars = text.chars();
+    while let Some(c) = chars.next() {
+        if c == '\x1b' {
+            if let Some(next) = chars.next() {
+                if next == '[' {
+                    for c in chars.by_ref() {
+                        if c.is_ascii_alphabetic() { break; }
+                    }
+                } else if next == ']' {
+                    let mut prev = ']';
+                    for c in chars.by_ref() {
+                        if c == '\x07' { break; }
+                        if prev == '\x1b' && c == '\\' { break; }
+                        prev = c;
+                    }
+                }
+            }
+        } else {
+            let cp = c as u32;
+            len += if is_wide_char(cp) { 2 } else { 1 };
+        }
+    }
+    len
 }
 
 #[cfg(test)]
