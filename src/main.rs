@@ -438,7 +438,7 @@ fn main() {
 
     executor.run_integrations();
 
-    let py_engine = cps::PythonEngine::new(&cfg.python);
+    let mut py_engine = cps::PythonEngine::new(&cfg.python);
     py_engine.plugins.fire("on_startup", &std::collections::HashMap::new());
 
     if py_engine.plugins.count() > 0 {
@@ -461,6 +461,7 @@ fn main() {
                 let _ = io::stdout().flush();
                 let tui_ok = theme.run();
                 py_engine.plugins.fire("on_exit", &std::collections::HashMap::new());
+                py_engine.shutdown();
                 std::process::exit(if tui_ok { 0 } else { 1 });
             } else {
                 eprintln!("ctx: tui_mode enabled but theme has no run() function");
@@ -798,6 +799,7 @@ fn main() {
     }
 
     py_engine.plugins.fire("on_exit", &std::collections::HashMap::new());
+    py_engine.shutdown();
     executor.run_exit_trap();
     cleanup(&history_path, &history, known_lines, &cfg, &mut executor.env);
 }

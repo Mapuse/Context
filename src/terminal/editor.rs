@@ -81,6 +81,7 @@ fn tab_common_prefix(completions: &[String]) -> String {
 static KILL_RING: LazyLock<Mutex<Vec<String>>> = LazyLock::new(|| Mutex::new(Vec::new()));
 static UNDO_STACK: LazyLock<Mutex<Vec<(String, usize)>>> = LazyLock::new(|| Mutex::new(Vec::new()));
 static REDO_STACK: LazyLock<Mutex<Vec<(String, usize)>>> = LazyLock::new(|| Mutex::new(Vec::new()));
+static LAST_UNDO_PUSH: LazyLock<Mutex<Option<std::time::Instant>>> = LazyLock::new(|| Mutex::new(None));
 
 use std::borrow::Cow;
 
@@ -92,17 +93,32 @@ struct EditorRenderCtx<'a> {
 }
 
 fn push_undo(input: &str, cursor: usize) {
-    UNDO_STACK.lock().expect("UNDO_STACK lock").push((input.to_string(), cursor));
+    let now = std::time::Instant::now();
+    let coalesce = matches!(
+        LAST_UNDO_PUSH.lock().expect("LAST_UNDO_PUSH lock").as_ref(),
+        Some(last) if now.duration_since(*last) < std::time::Duration::from_millis(500)
+    );
+    let mut stack = UNDO_STACK.lock().expect("UNDO_STACK lock");
+    if coalesce && !stack.is_empty() {
+        stack.pop();
+    }
+    stack.push((input.to_string(), cursor));
+    drop(stack);
+    if !coalesce {
+        *LAST_UNDO_PUSH.lock().expect("LAST_UNDO_PUSH lock") = Some(now);
+    }
     REDO_STACK.lock().expect("REDO_STACK lock").clear();
 }
 
 fn undo(input: &str, cursor: usize) -> Option<(String, usize)> {
+    *LAST_UNDO_PUSH.lock().expect("LAST_UNDO_PUSH lock") = None;
     UNDO_STACK.lock().expect("UNDO_STACK lock").pop().inspect(|_prev| {
         REDO_STACK.lock().expect("REDO_STACK lock").push((input.to_string(), cursor));
     })
 }
 
 fn redo(input: &str, cursor: usize) -> Option<(String, usize)> {
+    *LAST_UNDO_PUSH.lock().expect("LAST_UNDO_PUSH lock") = None;
     REDO_STACK.lock().expect("REDO_STACK lock").pop().inspect(|_prev| {
         UNDO_STACK.lock().expect("UNDO_STACK lock").push((input.to_string(), cursor));
     })
@@ -755,6 +771,8 @@ pub fn read_line_editor(
     let mut vi_visual_start: usize = 0;
     let mut overwrite_mode = false;
     let mut prev_mode_for_cursor = EditorMode::Emacs;
+    let mut last_suggest_input = String::new();
+    let mut cached_suggestion: Option<String> = None;
 
     let mut rctx = EditorRenderCtx {
         prompt: Cow::Borrowed(prompt),
@@ -791,7 +809,11 @@ pub fn read_line_editor(
 
     loop {
         let mut suggestion = if autosuggest_cfg.enabled && autosuggest_cfg.strategy != "none" && input.chars().count() >= autosuggest_cfg.min_chars as usize {
-            find_suggestion(&input, history, autosuggest_cfg.case_sensitive, history_cfg.substring_search)
+            if cached_suggestion.is_none() || input != last_suggest_input {
+                cached_suggestion = Some(find_suggestion(&input, history, autosuggest_cfg.case_sensitive, history_cfg.substring_search));
+                last_suggest_input.clone_from(&input);
+            }
+            cached_suggestion.clone().unwrap_or_default()
         } else {
             String::new()
         };
@@ -1093,6 +1115,7 @@ pub fn read_line_editor(
                                     }
                                     if let Ok(Event::Key(ev)) = event::read() {
                                         match ev.code {
+                                            KeyCode::Char('c') if ev.modifiers.contains(KeyModifiers::CONTROL) => { search.clear(); break; }
                                             KeyCode::Char(c) => { search.push(c); }
                                             KeyCode::Esc => { search.clear(); break; }
                                             KeyCode::Enter => break,
@@ -1144,6 +1167,7 @@ pub fn read_line_editor(
                                     }
                                     if let Ok(Event::Key(ev)) = event::read() {
                                         match ev.code {
+                                            KeyCode::Char('c') if ev.modifiers.contains(KeyModifiers::CONTROL) => { search.clear(); break; }
                                             KeyCode::Char(c) => { search.push(c); }
                                             KeyCode::Esc => { search.clear(); break; }
                                             KeyCode::Enter => break,
@@ -1658,11 +1682,30 @@ pub fn read_line_editor(
                             KeyCode::Char('r') if modifiers.contains(KeyModifiers::CONTROL) => {
                                 let saved_input = input.clone();
                                 let saved_cursor = cursor_pos;
-                                let prompt_prefix = &rctx.prompt.input_prefix;
-                                print!("\x1b[2K\r{}", prompt_prefix);
-                                print!("(reverse-i-search)`': ");
+                                let prompt_prefix = rctx.prompt.input_prefix.clone();
+                                print!("\x1b[2K\r{}(reverse-i-search)`': ", prompt_prefix);
                                 io::stdout().flush()?;
                                 let mut search_buf = String::new();
+                                let mut cur_idx: Option<usize> = None;
+                                let find_from = |needle: &str, end: usize| -> Option<usize> {
+                                    if needle.is_empty() { return None; }
+                                    (0..end.min(history.len())).rev().find(|&i| {
+                                        let h = &history[i];
+                                        if history_cfg.search_case_sensitive {
+                                            h.contains(needle)
+                                        } else {
+                                            h.to_lowercase().contains(&needle.to_lowercase())
+                                        }
+                                    })
+                                };
+                                let render_search = |prefix: &str, query: &str, matched: Option<&str>, failed: bool| -> io::Result<()> {
+                                    let label = if failed { "failed " } else { "" };
+                                    print!("\x1b[2K\r{}({}reverse-i-search)`{}': ", prefix, label, query);
+                                    if let Some(line) = matched {
+                                        print!("{}", highlight_line(line, editor_cfg.colorize_output, colors_cfg));
+                                    }
+                                    io::stdout().flush()
+                                };
                                 loop {
                                     let ev = match event::read() {
                                         Ok(e) => e,
@@ -1675,19 +1718,23 @@ pub fn read_line_editor(
                                         match sc {
                                             KeyCode::Char(c) if !sm.contains(KeyModifiers::CONTROL) => {
                                                 search_buf.push(c);
-                                                let found = if history_cfg.search_case_sensitive {
-                                                    history.iter().rev().find(|h| h.contains(search_buf.as_str()))
+                                                cur_idx = find_from(&search_buf, history.len());
+                                                render_search(&prompt_prefix, &search_buf, cur_idx.map(|i| history[i].as_str()), false)?;
+                                            }
+                                            KeyCode::Char('r') if sm.contains(KeyModifiers::CONTROL) => {
+                                                let start = cur_idx.unwrap_or(history.len());
+                                                if start > 0
+                                                    && let Some(idx) = find_from(&search_buf, start) {
+                                                    cur_idx = Some(idx);
+                                                    render_search(&prompt_prefix, &search_buf, Some(history[idx].as_str()), false)?;
                                                 } else {
-                                                    let needle = search_buf.to_lowercase();
-                                                    history.iter().rev().find(|h| h.to_lowercase().contains(&needle))
-                                                };
-                                                if let Some(found) = found {
-                                                    input = found.clone();
-                                                     print!("\x1b[2K\r{}(reverse-i-search)`{}': {}", prompt_prefix, search_buf, highlight_line(&input, editor_cfg.colorize_output, colors_cfg));
-                                                } else {
-                                                    print!("\x1b[2K\r{}(reverse-i-search)`{}': ", prompt_prefix, search_buf);
+                                                    render_search(&prompt_prefix, &search_buf, None, true)?;
                                                 }
-                                                io::stdout().flush()?;
+                                            }
+                                            KeyCode::Backspace => {
+                                                search_buf.pop();
+                                                cur_idx = find_from(&search_buf, history.len());
+                                                render_search(&prompt_prefix, &search_buf, cur_idx.map(|i| history[i].as_str()), false)?;
                                             }
                                             KeyCode::Enter => {
                                                 if is_input_incomplete(&input) {
@@ -1732,19 +1779,26 @@ pub fn read_line_editor(
                                                 input = saved_input;
                                                 cursor_pos = saved_cursor;
                                                 rctx.prompt = Cow::Borrowed(prompt);
-                                                print!("\r{}", rctx.prompt.input_prefix);
-                                                io::stdout().flush()?;
                                                 break;
                                             }
-                                            KeyCode::Backspace => {
-                                                search_buf.pop();
-                                                print!("\x1b[2K\r{}(reverse-i-search)`{}': ", prompt_prefix, search_buf);
-                                                io::stdout().flush()?;
+                                            KeyCode::Char('g') if sm.contains(KeyModifiers::CONTROL) => {
+                                                input = saved_input;
+                                                cursor_pos = saved_cursor;
+                                                rctx.prompt = Cow::Borrowed(prompt);
+                                                break;
+                                            }
+                                            KeyCode::Char('c') if sm.contains(KeyModifiers::CONTROL) => {
+                                                input = saved_input;
+                                                cursor_pos = saved_cursor;
+                                                rctx.prompt = Cow::Borrowed(prompt);
+                                                print!("^C\r\n");
+                                                break;
                                             }
                                             _ => {}
                                         }
                                     }
                                 }
+                                redraw(&rctx, &input, cursor_pos, "")?;
                             }
                             KeyCode::Tab => {
                                 let completions = crate::shell::builtin::get_completions(&input, cursor_pos);
