@@ -354,7 +354,7 @@ dependencies = [
 [[package]]
 name = "cps"
 version = "0.0.70"
-source = "git+https://github.com/Mapuse/CPS#c4ba21e185398558052acec3f0b4619b4e8c0678"
+source = "git+https://github.com/Mapuse/CPS?rev=c4ba21e185398558052acec3f0b4619b4e8c0678#c4ba21e185398558052acec3f0b4619b4e8c0678"
 dependencies = [
  "clap",
  "pyo3",

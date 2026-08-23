@@ -1,6 +1,6 @@
 project('context', 'rust',
   version : '0.70.0',
-  license : 'unlicense',
+  license : 'MIT',
   default_options : [
     'optimization=3',
     'strip=true',

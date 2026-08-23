@@ -6,6 +6,9 @@ use crate::shell::expand::CURRENT_LINE;
 #[derive(Debug, Clone, PartialEq)]
 pub enum Token {
     Word(String),
+    /// All-digits word immediately adjacent to a redirect operator
+    /// (`2>`); only this form may act as an fd prefix.
+    IoNumber(String),
     SingleQuoted(String),
     DoubleQuoted(String),
     Backtick(String),
@@ -37,6 +40,9 @@ pub enum Token {
     AmpGreaterGreater,
     GreaterPipe,
     GreaterAmp,
+    /// Verbatim heredoc body captured by the lexer, plus its expand flag.
+    /// Emitted directly after the corresponding `<<`/`<<-` operator token.
+    HereDocBody(String, bool),
     DoubleLBracket,
     DoubleRBracket,
     Newline,
@@ -64,6 +70,7 @@ impl fmt::Display for Token {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Token::Word(s) => write!(f, "{}", s),
+            Token::IoNumber(s) => write!(f, "{}", s),
             Token::SingleQuoted(s) => write!(f, "'{}'", s),
             Token::DoubleQuoted(s) => write!(f, "\"{}\"", s),
             Token::Backtick(s) => write!(f, "`{}`", s),
@@ -95,6 +102,7 @@ impl fmt::Display for Token {
             Token::AmpGreaterGreater => write!(f, "&>>"),
             Token::GreaterPipe => write!(f, ">|"),
             Token::GreaterAmp => write!(f, ">&"),
+            Token::HereDocBody(body, _) => write!(f, "{}", body),
             Token::DoubleLBracket => write!(f, "[["),
             Token::DoubleRBracket => write!(f, "]]"),
             Token::Newline => writeln!(f),
@@ -123,6 +131,12 @@ impl fmt::Display for Token {
 pub struct Lexer {
     input: Vec<char>,
     pos: usize,
+    /// Heredoc operators (`<<`, `<<-`) seen on the current line whose
+    /// delimiter word has not been read yet (strip_tabs flag per op).
+    pending_heredoc_ops: Vec<bool>,
+    /// Heredocs whose delimiter was read; bodies are captured when the
+    /// line's newline is reached: (delimiter, expand, strip_tabs).
+    active_heredocs: Vec<(String, bool, bool)>,
 }
 
 impl Lexer {
@@ -130,6 +144,8 @@ impl Lexer {
         Self {
             input: input.chars().collect(),
             pos: 0,
+            pending_heredoc_ops: Vec::new(),
+            active_heredocs: Vec::new(),
         }
     }
 
@@ -182,7 +198,7 @@ impl Lexer {
         let mut word = String::new();
         while let Some(ch) = self.peek() {
             match ch {
-                ' ' | '\t' | '\r' | '\n' | '|' | '&' | ';' | '(' | ')' | '{' | '}'
+                ' ' | '\t' | '\r' | '\n' | '|' | '&' | ';' | '(' | ')'
                 | '<' | '>' => break,
                 '#' if word.is_empty() => {
                     self.skip_comment();
@@ -522,6 +538,10 @@ impl Lexer {
             match ch {
                 '\n' => {
                     self.advance();
+                    if !self.active_heredocs.is_empty() {
+                        let heredocs = std::mem::take(&mut self.active_heredocs);
+                        tokens.extend(self.capture_heredoc_bodies(&heredocs));
+                    }
                     tokens.push(Token::Newline);
                 }
                 '#' => {
@@ -529,11 +549,24 @@ impl Lexer {
                 }
                 '\'' => {
                     self.advance();
-                    tokens.push(Token::SingleQuoted(self.read_single_quoted()));
+                    let s = self.read_single_quoted();
+                    if self.pending_heredoc_ops.is_empty() {
+                        tokens.push(Token::SingleQuoted(s));
+                    } else {
+                        // Quoted heredoc delimiter: body is not expanded.
+                        let strip_tabs = self.pending_heredoc_ops.remove(0);
+                        self.active_heredocs.push((s, false, strip_tabs));
+                    }
                 }
                 '"' => {
                     self.advance();
-                    tokens.push(Token::DoubleQuoted(self.read_double_quoted()));
+                    let s = self.read_double_quoted();
+                    if self.pending_heredoc_ops.is_empty() {
+                        tokens.push(Token::DoubleQuoted(s));
+                    } else {
+                        let strip_tabs = self.pending_heredoc_ops.remove(0);
+                        self.active_heredocs.push((s, false, strip_tabs));
+                    }
                 }
                 '`' => {
                     self.advance();
@@ -557,13 +590,19 @@ impl Lexer {
                         tokens.push(Token::RParen);
                     }
                 }
-                '{' => {
-                    self.advance();
-                    tokens.push(Token::LBrace);
-                }
-                '}' => {
-                    self.advance();
-                    tokens.push(Token::RBrace);
+                '{' | '}' => {
+                    // A brace is a group delimiter only when followed by a
+                    // word terminator; otherwise it belongs to the word so
+                    // brace expansion can see it (`echo {a,b,c}`).
+                    let next = self.input.get(self.pos + 1).copied();
+                    let is_delimited = matches!(next,
+                        Some(' ') | Some('\t') | Some('\r') | Some('\n') | Some(';') | None);
+                    if is_delimited {
+                        tokens.push(if ch == '{' { Token::LBrace } else { Token::RBrace });
+                        self.advance();
+                    } else {
+                        tokens.push(Token::Word(self.read_word()));
+                    }
                 }
                 '|' => {
                     self.advance();
@@ -646,11 +685,13 @@ impl Lexer {
                             if self.peek() == Some('-') {
                                 self.advance();
                                 tokens.push(Token::LessLessDash);
+                                self.pending_heredoc_ops.push(true);
                             } else if self.peek() == Some('<') {
                                 self.advance();
                                 tokens.push(Token::LessLessLess);
                             } else {
                                 tokens.push(Token::LessLess);
+                                self.pending_heredoc_ops.push(false);
                             }
                         }
                         Some('>') => {
@@ -683,7 +724,11 @@ impl Lexer {
                         self.advance();
                         tokens.push(Token::DoubleLBracket);
                     } else {
-                        tokens.push(Token::Word("[".to_string()));
+                        // A lone `[` begins a word (`[a-z]*`, `[ -f x ]`);
+                        // keep it glued to the rest of the word.
+                        let mut w = String::from("[");
+                        w.push_str(&self.read_word());
+                        tokens.push(Token::Word(w));
                     }
                 }
                 ']' => {
@@ -692,7 +737,9 @@ impl Lexer {
                         self.advance();
                         tokens.push(Token::DoubleRBracket);
                     } else {
-                        tokens.push(Token::Word("]".to_string()));
+                        let mut w = String::from("]");
+                        w.push_str(&self.read_word());
+                        tokens.push(Token::Word(w));
                     }
                 }
                 '\\' => {
@@ -707,11 +754,67 @@ impl Lexer {
                 }
                 _ => {
                     let word = self.read_word();
-                    tokens.push(Self::keyword_or_word(&word));
+                    if !self.pending_heredoc_ops.is_empty() {
+                        // This word is the heredoc delimiter, not a token.
+                        let strip_tabs = self.pending_heredoc_ops.remove(0);
+                        self.active_heredocs.push((word, true, strip_tabs));
+                        continue;
+                    }
+                    // An all-digits word adjacent to a redirect operator is
+                    // an fd number (`2>/dev/null`); separated by a space it
+                    // is just an argument (`seq 1 3 5 > f`).
+                    let adjacent_redirect = matches!(self.peek(), Some('<') | Some('>'));
+                    if !word.is_empty()
+                        && word.bytes().all(|b| b.is_ascii_digit())
+                        && adjacent_redirect {
+                            tokens.push(Token::IoNumber(word));
+                        } else {
+                            tokens.push(Self::keyword_or_word(&word));
+                        }
                 }
             }
         }
         tokens
+    }
+
+    /// Read heredoc bodies verbatim from the input (positioned at the start
+    /// of the first body line) until each delimiter line is consumed.
+    fn capture_heredoc_bodies(&mut self, heredocs: &[(String, bool, bool)]) -> Vec<Token> {
+        let mut out = Vec::new();
+        for (delim, expand, strip_tabs) in heredocs {
+            let mut body = String::new();
+            loop {
+                if self.pos >= self.input.len() {
+                    break;
+                }
+                let mut line = String::new();
+                let mut saw_newline = false;
+                while let Some(c) = self.peek() {
+                    self.advance();
+                    if c == '\n' {
+                        saw_newline = true;
+                        break;
+                    }
+                    line.push(c);
+                }
+                let candidate = if *strip_tabs {
+                    line.trim_start_matches('\t')
+                } else {
+                    line.as_str()
+                };
+                if candidate == delim {
+                    break;
+                }
+                body.push_str(candidate);
+                if saw_newline {
+                    body.push('\n');
+                } else {
+                    break;
+                }
+            }
+            out.push(Token::HereDocBody(body, *expand));
+        }
+        out
     }
 
 }
@@ -765,7 +868,8 @@ mod tests {
     fn test_heredoc() {
         let tokens = tokenize("cat <<EOF");
         assert!(tokens.contains(&Token::LessLess));
-        assert!(tokens.contains(&Token::Word("EOF".into())));
+        // The delimiter word is consumed as a heredoc delimiter, not a token.
+        assert!(!tokens.contains(&Token::Word("EOF".into())));
     }
 
     #[test]
@@ -895,6 +999,9 @@ mod tests {
     #[test]
     fn test_brace_expansion() {
         let tokens = tokenize("echo {a,b,c}");
+        assert_eq!(tokens[1], Token::Word("{a,b,c}".into()));
+        assert!(!tokens.iter().any(|t| matches!(t, Token::LBrace | Token::RBrace)));
+        let tokens = tokenize("f() { echo hi; }");
         assert!(tokens.contains(&Token::LBrace));
         assert!(tokens.contains(&Token::RBrace));
     }
@@ -922,7 +1029,7 @@ mod tests {
     #[test]
     fn test_redirect_stderr_to_devnull() {
         let tokens = tokenize("cmd 2>/dev/null");
-        assert!(tokens.contains(&Token::Word("2".into())));
+        assert!(tokens.contains(&Token::IoNumber("2".into())));
         assert!(tokens.contains(&Token::Greater));
         assert!(tokens.contains(&Token::Word("/dev/null".into())));
     }
@@ -946,7 +1053,7 @@ mod tests {
     fn test_double_less_less_dash() {
         let tokens = tokenize("cat <<-EOF");
         assert!(tokens.contains(&Token::LessLessDash));
-        assert!(tokens.contains(&Token::Word("EOF".into())));
+        assert!(!tokens.contains(&Token::Word("EOF".into())));
     }
 
     #[test]
@@ -964,8 +1071,17 @@ mod tests {
     #[test]
     fn test_redirect_fd_num() {
         let tokens = tokenize("echo x 3>&1");
-        assert!(tokens.contains(&Token::Word("3".into())));
+        assert!(tokens.contains(&Token::IoNumber("3".into())));
         assert!(tokens.contains(&Token::GreaterAmp));
+    }
+
+    #[test]
+    fn test_digit_args_not_fd() {
+        let tokens = tokenize("seq 1 3 5 > /tmp/f");
+        assert!(tokens.contains(&Token::Word("1".into())));
+        assert!(tokens.contains(&Token::Word("3".into())));
+        assert!(tokens.contains(&Token::Word("5".into())));
+        assert!(!tokens.iter().any(|t| matches!(t, Token::IoNumber(_))));
     }
 
     #[test]
@@ -1096,5 +1212,6 @@ mod tests {
         assert!(tokens.contains(&Token::LessGreater));
     }
 }
+
 
 

@@ -18,7 +18,7 @@ Hook functions receive keyword arguments with shell context:
     on_command_not_found(command=...)
     on_prompt(cwd=..., exit_code=..., ...)
     on_keypress(key=...)
-    custom_hook名(...)
+    custom_hook(...)
 
 You can define ANY function name — context auto-discovers all public functions.
 

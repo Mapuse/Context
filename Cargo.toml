@@ -23,7 +23,7 @@ regex = "1"
 wallust = "3.5"
 serde_json = "1"
 
-cps = { git = "https://github.com/Mapuse/CPS", default-features = false }
+cps = { git = "https://github.com/Mapuse/CPS", rev = "c4ba21e185398558052acec3f0b4619b4e8c0678", default-features = false }
 
 [profile.release]
 opt-level = 3

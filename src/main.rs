@@ -24,7 +24,9 @@ fn cleanup(history_path: &std::path::Path, history: &[String], known_lines: usiz
     }
     if cfg.signals.reset_terminal_on_exit {
         let _ = crossterm::terminal::disable_raw_mode();
-        print!("\x1b[?25h\x1b[0m");
+        // Also reset bracketed paste and any custom cursor shape so the
+        // terminal state does not leak after an error exit.
+        print!("\x1b[?25h\x1b[?2004l\x1b[0 q\x1b[0m");
         let _ = io::stdout().flush();
     }
     if cfg.startup.show_config_path {
@@ -71,7 +73,7 @@ fn main() {
         std::process::exit(0);
     }
     if opts.version {
-        let cfg = config::loader::load();
+        let cfg = config::loader::load_with(opts.config_file.as_deref(), opts.no_config);
         eprintln!("{} {}", cfg.branding.app_name, cfg.branding.version);
         std::process::exit(0);
     }
@@ -84,20 +86,20 @@ fn main() {
         std::process::exit(0);
     }
     if opts.verbose_version {
-        let cfg = config::loader::load();
+        let cfg = config::loader::load_with(opts.config_file.as_deref(), opts.no_config);
         eprintln!("{} {} ({})", cfg.branding.app_name, cfg.branding.version, env!("CARGO_PKG_VERSION"));
         eprintln!("Rust edition 2024, compiled for {}", std::env::consts::ARCH);
         eprintln!("POSIX-compliant shell with modern features");
         std::process::exit(0);
     }
     if opts.print_config {
-        let cfg = config::loader::load();
+        let cfg = config::loader::load_with(opts.config_file.as_deref(), opts.no_config);
         let json = serde_json::to_string_pretty(&cfg).unwrap_or_default();
         println!("{}", json);
         std::process::exit(0);
     }
     if opts.dump_config {
-        let cfg = config::loader::load();
+        let cfg = config::loader::load_with(opts.config_file.as_deref(), opts.no_config);
         match toml::to_string_pretty(&cfg) {
             Ok(toml_str) => print!("{}", toml_str),
             Err(e) => eprintln!("ctx: failed to dump config: {}", e),
@@ -105,8 +107,7 @@ fn main() {
         std::process::exit(0);
     }
     if opts.show_config_path {
-        let path = config::loader::config_dir().join("c.toml");
-        println!("{}", path.display());
+        println!("{}", config::loader::config_path().display());
         std::process::exit(0);
     }
     if opts.show_config_dir {
@@ -145,6 +146,16 @@ fn main() {
         std::process::exit(0);
     }
 
+    // Apply -E/--env and -U/--unset before any execution mode so the
+    // environment is already prepared when the shell starts.
+    if let Some(ref kv) = opts.env_var
+        && let Some((k, v)) = kv.split_once('=') {
+            unsafe { std::env::set_var(k, v); }
+        }
+    if let Some(ref key) = opts.unset_var {
+        unsafe { std::env::remove_var(key); }
+    }
+
     let mut command_to_run = opts.command.clone();
     let read_from_stdin = opts.stdin;
 
@@ -178,7 +189,10 @@ fn main() {
     }
 
     if read_from_stdin {
-        let mut cfg = config::loader::load();
+        let mut cfg = config::loader::load_with(opts.config_file.as_deref(), opts.no_config);
+        // Early CLI flags that must apply to non-interactive modes too.
+        if opts.xtrace { cfg.environment.set_defaults.push("_OPT_X=1".to_string()); }
+        if opts.bash_compat { cfg.execution.bash_compat = true; }
         set_color_mode(&cfg.display.color_mode);
         terminal::dynamic::apply(&mut cfg);
         let env = Env::new();
@@ -193,15 +207,27 @@ fn main() {
         let stdin = io::stdin();
         let reader = BufReader::new(stdin.lock());
         let mut last_status = 0;
+        let mut pending = String::new();
         for line in reader.lines() {
             match line {
-                Ok(line) => {
-                    let line = line.trim().to_string();
-                    if line.is_empty() || line.starts_with('#') {
+                Ok(raw) => {
+                    if pending.is_empty() {
+                        let t = raw.trim();
+                        if t.is_empty() || t.starts_with('#') {
+                            continue;
+                        }
+                        pending.push_str(&raw);
+                    } else {
+                        pending.push('\n');
+                        pending.push_str(&raw);
+                    }
+                    // Buffer multi-line constructs until they parse cleanly.
+                    if terminal::editor::is_input_incomplete(&pending) {
                         continue;
                     }
-                    let tokens = shell::lexer::tokenize(&line);
+                    let tokens = shell::lexer::tokenize(&pending);
                     let ast = shell::parser::parse(tokens);
+                    pending.clear();
                     last_status = executor.execute(&ast);
                     if signals::SHOULD_EXIT.load(Ordering::SeqCst) {
                         break;
@@ -210,13 +236,21 @@ fn main() {
                 Err(_) => break,
             }
         }
+        if !pending.trim().is_empty() {
+            let tokens = shell::lexer::tokenize(&pending);
+            let ast = shell::parser::parse(tokens);
+            executor.execute(&ast);
+        }
         executor.run_exit_trap();
         executor.env.unset_all_traps();
         std::process::exit(last_status);
     }
 
     if let Some(cmd) = command_to_run {
-        let mut cfg = config::loader::load();
+        let mut cfg = config::loader::load_with(opts.config_file.as_deref(), opts.no_config);
+        // Early CLI flags that must apply to non-interactive modes too.
+        if opts.xtrace { cfg.environment.set_defaults.push("_OPT_X=1".to_string()); }
+        if opts.bash_compat { cfg.execution.bash_compat = true; }
         set_color_mode(&cfg.display.color_mode);
         terminal::dynamic::apply(&mut cfg);
         let env = Env::new();
@@ -237,21 +271,17 @@ fn main() {
         std::process::exit(status);
     }
 
-    let mut cfg = config::loader::load();
+    let mut cfg = config::loader::load_with(opts.config_file.as_deref(), opts.no_config);
 
-    if let Some(ref kv) = opts.env_var
-        && let Some((k, v)) = kv.split_once('=') {
-            unsafe { std::env::set_var(k, v); }
-        }
-    if let Some(ref key) = opts.unset_var {
-        unsafe { std::env::remove_var(key); }
-    }
 
     if opts.no_color {
         cfg.display.color_mode = "0".into();
     }
     if let Some(ref mode) = opts.color_mode {
         cfg.display.color_mode = mode.clone();
+    }
+    if opts.bash_compat {
+        cfg.execution.bash_compat = true;
     }
     if opts.posix {
         cfg.editor.expand_aliases = false;
@@ -367,7 +397,7 @@ fn main() {
         let _ = std::env::set_current_dir(path);
     }
     if opts.xtrace {
-        cfg.editor.colorize_output = true;
+        cfg.environment.set_defaults.push("_OPT_X=1".to_string());
     }
     if let Some(ref f) = opts.log_file {
         eprintln!("ctx: logging to {}", f);
@@ -406,6 +436,7 @@ fn main() {
 
     let env = Env::new();
     let mut executor = shell::executor::Executor::new(env, cfg.clone());
+    executor.interactive = true;
 
     for (name, path) in &cfg.named_dirs {
         executor.env.set_named_dir(name, path);
@@ -558,7 +589,7 @@ fn main() {
                     executor.execute(&ast);
                 }
             } else {
-                cfg = config::loader::load();
+                cfg = config::loader::load_with(opts.config_file.as_deref(), opts.no_config);
                 executor.cfg = cfg.clone();
             }
         }
@@ -848,16 +879,19 @@ fn write_history(path: &std::path::Path, history: &[String], cfg: &Config) -> io
         history
     };
 
+    // Open WITHOUT truncating, take the lock, then truncate — otherwise a
+    // concurrent shell's history can be wiped before we even hold the lock.
     let file = OpenOptions::new()
         .create(true)
         .write(true)
-        .truncate(true)
+        .truncate(false)
         .open(path)?;
 
     unsafe {
         libc::flock(file.as_raw_fd() as libc::c_int, libc::LOCK_EX);
     }
 
+    file.set_len(0)?;
     let mut writer = io::BufWriter::new(&file);
     for entry in entries {
         writeln!(writer, "{}", entry)?;

@@ -203,7 +203,7 @@
 | Profile | Command | Flags | Use case |
 | ------- | ------- | ----- | -------- |
 | Debug | `cargo build` | — | Development iteration, fast compile |
-| Release | `cargo build --release` | `opt-level = 3`, `lto = true`, `strip = true` | Production binary, minimised size |
+| Release | `cargo build --release` | `opt-level = 3`, `lto = true`, `codegen-units = 1`, `panic = "abort"`, `strip = true` | Production binary, minimised size |
 | Check | `cargo check` | — | Compile-only verification, no artifacts |
 
 ```shell
@@ -213,8 +213,27 @@ cargo check
 # Debug build
 cargo build
 
-# Release build (optimised for size)
+# Release build (optimised)
 cargo build --release
+```
+
+### Feature flags
+
+| Feature | Default | Enables |
+| ------- | ------- | ------- |
+| `python` | off | cps Python subsystem: plugins, themes and TUIs through an embedded interpreter |
+
+The default build is fully native and thin — no `pyo3`, no `libpython` linked, zero interpreter startup cost. The `cps` engine is lazy: even in a `python` build the interpreter only initialises when a plugin/theme/TUI is actually configured, and is finalised on exit.
+
+```shell
+# Thin default build (no Python)
+cargo build --release
+
+# With Python subsystem (libpython dynamically linked)
+cargo build --release --features python
+
+# Compile-only verification of the opt-in path
+cargo check --features python
 ```
 
 ## Installation
@@ -281,7 +300,7 @@ mcx -i context
 | regex | 1 | Regex matching (`regexmatch` builtin) |
 | wallust | 3.5 | Wallpaper color extraction (k-means, fast_resize, color spaces) |
 | serde_json | 1 | JSON serialization for dynamic color data |
-| pyo3 | 0.25 | Embedded Python engine (themes, plugins, TUI) |
+| cps | git | Python subsystem host (plugins/themes/TUI); pyo3 only with `--features python` |
 
 ## Testing
 

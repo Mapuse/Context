@@ -8,6 +8,7 @@ pub struct Expander<'a> {
     env: &'a mut Env,
     last_status: i32,
     positional: Vec<String>,
+    arg_zero: String,
     background_pid: i32,
     pending_sets: RefCell<Vec<(String, String)>>,
     nounset: bool,
@@ -21,10 +22,12 @@ impl<'a> Expander<'a> {
         } else {
             positional
         };
+        let arg_zero = env.get("0").unwrap_or("ctx").to_string();
         Self {
             env,
             last_status,
             positional,
+            arg_zero,
             background_pid,
             pending_sets: RefCell::new(Vec::new()),
             nounset: false,
@@ -249,6 +252,25 @@ impl<'a> Expander<'a> {
                 if *i < len { *i += 1; }
                 self.expand_var(&var)
             }
+            '[' => {
+                // $[expr] — arithmetic expansion (legacy form of $((expr)))
+                let start = *i + 1;
+                let mut depth = 0u32;
+                let mut j = start;
+                while j < len {
+                    match chars[j] {
+                        '[' => depth += 1,
+                        ']' if depth == 0 => break,
+                        ']' => depth -= 1,
+                        _ => {}
+                    }
+                    j += 1;
+                }
+                let inner: String = chars[start..j.min(len)].iter().collect();
+                *i = j + 1;
+                let expanded_inner = self.expand_word(&inner);
+                crate::shell::builtin::eval_arith_assign(&expanded_inner, self.env).to_string()
+            }
             '?' => { *i += 1; self.last_status.to_string() }
             '$' => { *i += 1; std::process::id().to_string() }
             '!' => { *i += 1; self.background_pid.to_string() }
@@ -259,7 +281,8 @@ impl<'a> Expander<'a> {
                     *i += 1;
                 }
                 if n == 0 {
-                    self.positional.first().cloned().unwrap_or_default()
+                    // `$0` is the shell name, independent of the positionals.
+                    self.arg_zero.clone()
                 } else if n - 1 < self.positional.len() {
                     self.positional[n - 1].clone()
                 } else {
@@ -386,6 +409,15 @@ impl<'a> Expander<'a> {
                 let name = &name[1..];
                 let val = self.env.get(name).unwrap_or("").to_string();
                 val.chars().count().to_string()
+            } else if let Some(base) = name.strip_suffix("[@]").or_else(|| name.strip_suffix("[*]")) {
+                // ${#arr[@]} — number of array elements.
+                if self.env.is_indexed_array(base) {
+                    self.env.indexed_array_len(base).to_string()
+                } else if self.env.is_assoc_array(base) {
+                    self.env.assoc_len(base).to_string()
+                } else {
+                    "0".to_string()
+                }
             } else if name.as_bytes()[0] == b'%' {
                 let name = &name[1..];
                 let val = self.env.get(name).unwrap_or("").to_string();
@@ -571,6 +603,12 @@ impl<'a> Expander<'a> {
             self.pending_sets.borrow_mut().push((name.to_string(), default.to_string()));
             default.to_string()
         } else if let Some(pos) = var.find('#') {
+            // `${arr[#]}` is an indexed-array element count, not a
+            // prefix-removal pattern.
+            if let Some(arr_name) = var.strip_suffix("[#]")
+                && self.env.is_indexed_array(arr_name) {
+                    return self.env.indexed_array_len(arr_name).to_string();
+                }
             let name = &var[..pos];
             let is_double = pos + 1 < var.len() && var.as_bytes()[pos + 1] == b'#';
             let pattern_str = if is_double { &var[pos + 2..] } else { &var[pos + 1..] };
@@ -731,7 +769,23 @@ impl<'a> Expander<'a> {
         } else if var.contains('[') && var.ends_with(']') {
             if let Some(bracket_pos) = var.find('[') {
                 let name = &var[..bracket_pos];
-                let key = &var[bracket_pos + 1..].trim_end_matches(']');
+                let key: &str = var[bracket_pos + 1..].trim_end_matches(']');
+                if key == "@" || key == "*" {
+                    // Whole-array expansion over consecutive arr_N keys.
+                    if self.env.is_indexed_array(name) {
+                        return self.env.indexed_array_elements(name).join(" ");
+                    }
+                    if self.env.is_assoc_array(name) {
+                        return self.env.assoc_values(name).join(" ");
+                    }
+                    return self.env.get(name).unwrap_or("").to_string();
+                }
+                if key == "#" {
+                    // `${arr[#]}` — element count of an indexed array.
+                    if self.env.is_indexed_array(name) {
+                        return self.env.indexed_array_len(name).to_string();
+                    }
+                }
                 if let Some(val) = self.env.assoc_get(name, key) {
                     val.to_string()
                 } else if let Some(val) = self.env.indexed_array_get(name, key) {
@@ -802,6 +856,14 @@ impl<'a> Expander<'a> {
             self.env.expand_special(var)
         }
     }
+}
+
+/// Glob match `pattern` against `text` (supports `*`, `?`, bracket classes,
+/// POSIX classes and extglob alternations).
+pub fn glob_match_str(pattern: &str, text: &str) -> bool {
+    let p: Vec<char> = pattern.chars().collect();
+    let t: Vec<char> = text.chars().collect();
+    glob_match_inner(&p, &t)
 }
 
 fn glob_match_simple(pattern: &[char], text: &[char]) -> bool {
@@ -1717,5 +1779,25 @@ mod tests {
         let mut exp = Expander::new(&mut env, 0, vec![], 0);
         let home = std::env::var("HOME").unwrap_or_default();
         assert_eq!(exp.expand_word("~"), home);
+    }
+}
+
+#[cfg(test)]
+mod array_expansion_tests {
+    use super::*;
+    use crate::shell::env::Env;
+
+    #[test]
+    fn test_array_at_and_length_expansion() {
+        let mut env = Env::new();
+        env.set("r_0", "a");
+        env.set("r_1", "b");
+        assert!(env.is_indexed_array("r"), "is_indexed_array");
+        {
+            let mut ex = Expander::new(&mut env, 0, vec![], 0);
+            assert_eq!(ex.expand_var("r[0]"), "a");
+            assert_eq!(ex.expand_var("r[@]"), "a b");
+            assert_eq!(ex.expand_var("#r[@]"), "2");
+        }
     }
 }

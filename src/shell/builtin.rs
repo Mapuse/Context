@@ -16,7 +16,6 @@ type I32Fn = dyn Fn(i32) + Send + Sync;
 type LookupFn = dyn Fn(&str) -> Option<String> + Send + Sync;
 
 pub static READLINE_CB: OnceLock<Box<ReadlineFn>> = OnceLock::new();
-pub static DISOWN_PENDING: OnceLock<Mutex<Vec<i32>>> = OnceLock::new();
 pub static HISTORY_CB: OnceLock<Box<dyn Fn() -> Vec<String> + Send + Sync>> = OnceLock::new();
 pub static FC_EXEC_CB: OnceLock<Box<VoidFn>> = OnceLock::new();
 pub static DISOWN_JOBS_CB: OnceLock<Mutex<Option<Box<I32Fn>>>> = OnceLock::new();
@@ -72,6 +71,29 @@ pub fn is_disabled(name: &str) -> bool {
     DISABLED_BUILTINS.lock().unwrap().contains(name)
 }
 
+/// Every builtin name the shell dispatches (or intercepts) — the single
+/// source of truth for `builtin_is`, `type`, `enable` and completion.
+pub const BUILTINS: &[&str] = &[
+    ":", ".", "[",
+    "alias", "bg", "bindkey", "break", "builtin", "caller", "cd", "command",
+    "compgen", "complete", "continue",
+    "declare", "dirs", "disown",
+    "echo", "enable", "env", "eval", "exec", "exit", "export",
+    "false", "fc", "fg",
+    "getopts",
+    "hash", "help", "history",
+    "jobs",
+    "kill",
+    "let", "local", "logout",
+    "mapfile", "math", "module",
+    "popd", "printf", "pushd", "pwd",
+    "read", "readarray", "readonly", "realpath", "regexmatch", "return",
+    "select", "set", "shift", "shopt", "source", "suspend",
+    "test", "times", "trap", "true", "type", "typeset",
+    "ulimit", "umask", "unalias", "unset", "unsetenv",
+    "wait", "which",
+];
+
 pub struct BuiltinResult {
     pub status: i32,
     pub exit: bool,
@@ -121,6 +143,9 @@ pub fn run(args: &[String], env: &mut Env, cfg: &Config, last_status: i32) -> Bu
             let mut test_args = args[1..].to_vec();
             if test_args.last().map(|s| s == "]").unwrap_or(false) {
                 test_args.pop();
+            } else {
+                eprintln!("context: [: missing `]'");
+                return BuiltinResult::err(2);
             }
             cmd_test(&test_args)
         }
@@ -302,30 +327,41 @@ fn cmd_cd(args: &[String], env: &mut Env, cfg: &Config) -> BuiltinResult {
         } else if let Ok(cwd) = std::env::current_dir() {
             env.set("PWD", &cwd.to_string_lossy());
         }
-    } else if let Ok(cwd) = std::env::current_dir() {
-        env.set("PWD", &cwd.to_string_lossy());
+    } else {
+        // `-L` (default): build PWD logically from the current PWD without
+        // resolving symlinks.
+        let base = env.get("PWD")
+            .filter(|p| p.starts_with('/'))
+            .map(|s| s.to_string())
+            .unwrap_or_else(|| old.clone());
+        let logical = logical_path(&base, &target);
+        env.set("PWD", &logical);
         if start < args.len() && args[start] == "-" {
-            println!("{}", cwd.to_string_lossy());
+            println!("{}", logical);
         }
     }
     BuiltinResult::ok()
 }
 
-fn levenshtein_distance(a: &str, b: &str) -> usize {
-    let a_len = a.len();
-    let b_len = b.len();
-    let mut d = vec![vec![0usize; b_len + 1]; a_len + 1];
-    for (i, row) in d.iter_mut().enumerate().take(a_len + 1) { row[0] = i; }
-    for (j, cell) in d[0].iter_mut().enumerate().take(b_len + 1) { *cell = j; }
-    for i in 1..=a_len {
-        for j in 1..=b_len {
-            let cost = if a.as_bytes()[i - 1] == b.as_bytes()[j - 1] { 0 } else { 1 };
-            d[i][j] = (d[i - 1][j] + 1)
-                .min(d[i][j - 1] + 1)
-                .min(d[i - 1][j - 1] + cost);
+/// Join `base` and `target` lexically, resolving `.` and `..` without any
+/// filesystem access (`cd -L` semantics).
+fn logical_path(base: &str, target: &str) -> String {
+    let combined = if target.starts_with('/') {
+        target.to_string()
+    } else if base.is_empty() || base == "/" {
+        format!("/{}", target)
+    } else {
+        format!("{}/{}", base.trim_end_matches('/'), target)
+    };
+    let mut parts: Vec<&str> = Vec::new();
+    for seg in combined.split('/') {
+        match seg {
+            "" | "." => {}
+            ".." => { parts.pop(); }
+            s => parts.push(s),
         }
     }
-    d[a_len][b_len]
+    format!("/{}", parts.join("/"))
 }
 
 fn spell_correct_dir(target: &str, cwd: &str) -> Option<String> {
@@ -347,7 +383,7 @@ fn spell_correct_dir(target: &str, cwd: &str) -> Option<String> {
     let mut best: Option<(String, usize)> = None;
     for entry in entries.flatten() {
         let name = entry.file_name().to_string_lossy().to_string();
-        let dist = levenshtein_distance(prefix, &name);
+        let dist = crate::shell::executor::levenshtein(prefix, &name);
         if dist <= threshold {
             match &best {
                 Some((_, best_dist)) if dist < *best_dist => {
@@ -489,7 +525,13 @@ fn cmd_alias(args: &[String], env: &mut Env) -> BuiltinResult {
         if let Some(eq_pos) = arg.find('=') {
             let name = &arg[..eq_pos];
             let value = &arg[eq_pos + 1..];
-            let value = value.trim_matches(|c| c == '\'' || c == '"');
+            // Strip exactly one matching outer quote pair, preserving any
+            // inner quotes.
+            let value = match (value.chars().next(), value.chars().last()) {
+                (Some('\''), Some('\'')) if value.len() >= 2 => &value[1..value.len() - 1],
+                (Some('"'), Some('"')) if value.len() >= 2 => &value[1..value.len() - 1],
+                _ => value,
+            };
             env.set_alias(name, value);
         } else {
             match env.get_alias(arg) {
@@ -557,6 +599,36 @@ fn cmd_history(args: &[String], cfg: &Config) -> BuiltinResult {
     } else if args.first().map(|s| s.as_str()) == Some("-w") {
         eprintln!("context: history: -w: history writing not yet supported");
         BuiltinResult::ok()
+    } else if args.first().map(|s| s.as_str()) == Some("-d") {
+        let Some(num) = args.get(1).and_then(|s| s.parse::<usize>().ok()) else {
+            eprintln!("context: history: -d: history position required");
+            return BuiltinResult::err(2);
+        };
+        match fs::read_to_string(&history_path) {
+            Ok(contents) => {
+                let mut lines: Vec<&str> = contents.lines().collect();
+                if num == 0 || num > lines.len() {
+                    eprintln!("context: history: {}: no such history entry", num);
+                    return BuiltinResult::err(1);
+                }
+                lines.remove(num - 1);
+                let mut out = lines.join("\n");
+                if !out.is_empty() {
+                    out.push('\n');
+                }
+                match fs::write(&history_path, out) {
+                    Ok(_) => BuiltinResult::ok(),
+                    Err(e) => {
+                        eprintln!("context: history: -d: {}", e);
+                        BuiltinResult::err(1)
+                    }
+                }
+            }
+            Err(e) => {
+                eprintln!("context: history: -d: {}", e);
+                BuiltinResult::err(1)
+            }
+        }
     } else {
         match fs::read_to_string(&history_path) {
             Ok(contents) => {
@@ -697,7 +769,9 @@ fn cmd_set(args: &[String], env: &mut Env) -> BuiltinResult {
             let value = &arg[eq_pos + 1..];
             env.set(name, value);
         } else if !arg.starts_with('+') && !arg.starts_with('-') {
-
+            // `set name value...` — set the positional parameters.
+            env.set_positional(args[i..].to_vec());
+            break;
         } else {
             eprintln!("context: set: {}: unknown option", arg);
         }
@@ -761,7 +835,7 @@ fn cmd_pwd(args: &[String]) -> BuiltinResult {
 }
 
 fn cmd_type(args: &[String], env: &Env) -> BuiltinResult {
-    let builtins = [":","cd","exit","export","unset","alias","unalias","source","history","set","env","pwd","type","which","echo","printf","test","let","trap","pushd","popd","dirs","hash","math","regexmatch","module","readonly","builtin","shopt","enable","declare","typeset","local","exec",".","false","true","shift","wait","kill","umask","command","eval","select","getopts","realpath","break","continue","ulimit","times","logout","help","mapfile","readarray","compgen","complete","suspend"];
+    let builtins = BUILTINS;
     let mut mode_t = false;
     let mut mode_p = false;
     let mut mode_big_p = false;
@@ -1093,6 +1167,20 @@ fn cmd_printf(args: &[String]) -> BuiltinResult {
             i += 1;
             if fmt_chars[i] == '%' {
                 output.push('%');
+            } else if fmt_chars[i] == '(' {
+                // %(strftime)T — time formatted with an inline strftime spec.
+                i += 1;
+                let start = i;
+                while i < fmt_len && fmt_chars[i] != ')' { i += 1; }
+                let fmt_str: String = fmt_chars[start..i.min(fmt_len)].iter().collect();
+                if i < fmt_len { i += 1; } // consume ')'
+                if i < fmt_len && fmt_chars[i] == 'T' {
+                    output.push_str(&strftime_now(&fmt_str));
+                } else {
+                    output.push_str("%(");
+                    output.push_str(&fmt_str);
+                    output.push(')');
+                }
             } else {
                 let mut force_sign = false;
                 let mut space_sign = false;
@@ -1154,21 +1242,24 @@ fn cmd_printf(args: &[String]) -> BuiltinResult {
                 match fmt_chars[i] {
                     's' => {
                         let val = args.get(arg_idx + 1).map(|s| s.as_str()).unwrap_or("");
-                        let s = match precision {
-                            Some(p) => if val.len() > p { &val[..p] } else { val },
-                            None => val,
+                        // Precision truncates on char boundaries; padding is
+                        // computed in display columns so wide chars align.
+                        let s: String = match precision {
+                            Some(p) => val.chars().take(p).collect(),
+                            None => val.to_string(),
                         };
-                        if s.len() < width {
-                            let pad = " ".repeat(width - s.len());
+                        let disp = crate::terminal::color::visible_len(&s);
+                        if disp < width {
+                            let pad = " ".repeat(width - disp);
                             if left_align {
-                                output.push_str(s);
+                                output.push_str(&s);
                                 output.push_str(&pad);
                             } else {
                                 output.push_str(&pad);
-                                output.push_str(s);
+                                output.push_str(&s);
                             }
                         } else {
-                            output.push_str(s);
+                            output.push_str(&s);
                         }
                         arg_idx += 1;
                     }
@@ -1410,6 +1501,14 @@ fn cmd_printf(args: &[String]) -> BuiltinResult {
                         output.push_str(&escape_echo(val));
                         arg_idx += 1;
                     }
+                    'T' | '@' => {
+                        // %T — strftime-formatted current time (format from arg,
+                        // defaulting to %H:%M:%S); '@' is bash's alias for it.
+                        let val = args.get(arg_idx + 1).map(|s| s.as_str()).unwrap_or("");
+                        let fmt_str = if val.is_empty() { "%H:%M:%S" } else { val };
+                        output.push_str(&strftime_now(fmt_str));
+                        arg_idx += 1;
+                    }
                     _ => {
                         output.push('%');
                         output.push(fmt_chars[i]);
@@ -1430,9 +1529,27 @@ fn cmd_printf(args: &[String]) -> BuiltinResult {
     BuiltinResult::ok()
 }
 
+fn strftime_now(fmt: &str) -> String {
+    let Ok(c_fmt) = std::ffi::CString::new(fmt) else {
+        return String::new();
+    };
+    let t = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as libc::time_t)
+        .unwrap_or(0);
+    let mut tm: libc::tm = unsafe { std::mem::zeroed() };
+    unsafe { libc::localtime_r(&t, &mut tm); }
+    let mut buf = [0u8; 256];
+    let n = unsafe {
+        libc::strftime(buf.as_mut_ptr() as *mut i8, buf.len(), c_fmt.as_ptr(), &tm)
+    };
+    if n > 0 { String::from_utf8_lossy(&buf[..n]).into_owned() } else { String::new() }
+}
+
 fn cmd_test(args: &[String]) -> BuiltinResult {
     if args.is_empty() {
-        return BuiltinResult::err(2);
+        // `test` with no arguments is false (status 1).
+        return BuiltinResult::err(1);
     }
     let result = eval_test_expr(args, 0).0;
     if result { BuiltinResult::ok() } else { BuiltinResult::err(1) }
@@ -1660,11 +1777,11 @@ impl<'a> ArithmeticParser<'a> {
     }
 
     fn parse_comma(&mut self) -> i64 {
-        let mut result = self.parse_expr();
+        let mut result = self.parse_conditional();
         self.skip_whitespace();
         while self.peek() == Some(',') {
             self.advance();
-            result = self.parse_expr();
+            result = self.parse_conditional();
             self.skip_whitespace();
         }
         result
@@ -3028,21 +3145,39 @@ fn cmd_declare(args: &[String], env: &mut Env) -> BuiltinResult {
 }
 
 fn cmd_wait(args: &[String]) -> BuiltinResult {
-    let mut nonblock = false;
+    let mut next_child = false;
     let mut pid_args: Vec<&String> = Vec::new();
     for arg in args {
         if arg == "-n" {
-            nonblock = true;
+            next_child = true;
         } else {
             pid_args.push(arg);
         }
     }
     if pid_args.is_empty() {
+        if next_child {
+            // `wait -n` blocks until any one child completes.
+            let mut status: i32 = 0;
+            loop {
+                let ret = unsafe { libc::waitpid(-1, &mut status, 0) };
+                if ret > 0 {
+                    let st = if libc::WIFEXITED(status) { libc::WEXITSTATUS(status) }
+                             else if libc::WIFSIGNALED(status) { 128 + libc::WTERMSIG(status) }
+                             else if libc::WIFSTOPPED(status) { 128 + libc::WSTOPSIG(status) }
+                             else { 1 };
+                    return BuiltinResult::err(st);
+                }
+                let err = std::io::Error::last_os_error().raw_os_error();
+                if err != Some(libc::EINTR) {
+                    break;
+                }
+            }
+            return BuiltinResult::ok();
+        }
         let mut last_status = 0;
         loop {
             let mut status: i32 = 0;
-            let flags = if nonblock { libc::WNOHANG } else { 0 };
-            let ret = unsafe { libc::waitpid(-1, &mut status, flags) };
+            let ret = unsafe { libc::waitpid(-1, &mut status, 0) };
             if ret <= 0 { break; }
             last_status = if libc::WIFEXITED(status) { libc::WEXITSTATUS(status) }
                          else if libc::WIFSIGNALED(status) { 128 + libc::WTERMSIG(status) }
@@ -3054,9 +3189,8 @@ fn cmd_wait(args: &[String]) -> BuiltinResult {
     let mut last_status = 0;
     for arg in pid_args {
         if let Ok(pid) = arg.parse::<i32>() {
-            let flags = if nonblock { libc::WNOHANG } else { 0 };
             let mut status: i32 = 0;
-            let ret = unsafe { libc::waitpid(pid, &mut status, flags) };
+            let ret = unsafe { libc::waitpid(pid, &mut status, 0) };
             if ret == -1 {
                 eprintln!("context: wait: {}: no such child", pid);
                 return BuiltinResult::err(127);
@@ -3554,38 +3688,8 @@ fn cmd_getopts(args: &[String], env: &mut Env) -> BuiltinResult {
     }
     let opt_char = current.as_bytes()[start] as char;
     let remaining = start + 1 < current.len();
-    if optstring.contains(opt_char) {
-        env.set(name, &opt_char.to_string());
-        if optstring.contains(format!("{}:", opt_char).as_str()) {
-            if remaining {
-                env.set("OPTARG", &current[(start + 1)..]);
-                env.set("OPTIND", &(optind + 1).to_string());
-                env.set("_GETOPT_OFFSET", "0");
-            } else if optind < shell_args.len() {
-                env.set("OPTARG", &shell_args[optind]);
-                env.set("OPTIND", &(optind + 2).to_string());
-                env.set("_GETOPT_OFFSET", "0");
-            } else {
-                if !silent {
-                    eprintln!("context: getopts: {} requires an argument", opt_char);
-                }
-                env.set("OPTARG", &opt_char.to_string());
-                env.set("OPTIND", &(optind + 1).to_string());
-                env.set("_GETOPT_OFFSET", "0");
-                env.set(name, "?");
-                return BuiltinResult::err(2);
-            }
-        } else {
-            env.set("OPTARG", "");
-            if remaining {
-                env.set("_GETOPT_OFFSET", &(offset + 1).to_string());
-            } else {
-                env.set("OPTIND", &(optind + 1).to_string());
-                env.set("_GETOPT_OFFSET", "0");
-            }
-        }
-        BuiltinResult::ok()
-    } else {
+    // Unknown option: report via `?` and continue the loop.
+    if !optstring.contains(opt_char) {
         if !silent {
             eprintln!("context: getopts: {}: invalid option", opt_char);
         }
@@ -3597,9 +3701,55 @@ fn cmd_getopts(args: &[String], env: &mut Env) -> BuiltinResult {
             env.set("OPTIND", &(optind + 1).to_string());
             env.set("_GETOPT_OFFSET", "0");
         }
-        BuiltinResult::err(2)
+        return BuiltinResult::ok();
+    }
+
+    // Argument requirement: `c:` mandatory, `c::` optional, none = flag.
+    let optional_arg = optstring.contains(&format!("{}::", opt_char));
+    let mandatory_arg = optstring.contains(&format!("{}:", opt_char)) && !optional_arg;
+    env.set(name, &opt_char.to_string());
+    if remaining {
+        // Argument glued to the option (`-ovalue`) — both `c:` and `c::`.
+        if optional_arg || mandatory_arg {
+            env.set("OPTARG", &current[(start + 1)..]);
+            env.set("OPTIND", &(optind + 1).to_string());
+            env.set("_GETOPT_OFFSET", "0");
+            BuiltinResult::ok()
+        } else {
+            env.set("OPTARG", "");
+            env.set("_GETOPT_OFFSET", &(offset + 1).to_string());
+            BuiltinResult::ok()
+        }
+    } else if mandatory_arg {
+        // Mandatory argument must come from the next argv.
+        if optind < shell_args.len() {
+            env.set("OPTARG", &shell_args[optind]);
+            env.set("OPTIND", &(optind + 2).to_string());
+            env.set("_GETOPT_OFFSET", "0");
+            BuiltinResult::ok()
+        } else {
+            // Mandatory argument missing: report and let the loop continue.
+            if silent {
+                env.set(name, ":");
+            } else {
+                eprintln!("context: getopts: {} requires an argument", opt_char);
+                env.set(name, "?");
+            }
+            env.set("OPTARG", &opt_char.to_string());
+            env.set("OPTIND", &(optind + 1).to_string());
+            env.set("_GETOPT_OFFSET", "0");
+            BuiltinResult::ok()
+        }
+    } else {
+        // Flag; for optional-arg (`c::`) nothing is consumed.
+        env.set("OPTARG", "");
+        env.set("OPTIND", &(optind + 1).to_string());
+        env.set("_GETOPT_OFFSET", "0");
+        BuiltinResult::ok()
     }
 }
+
+
 
 fn cmd_realpath(args: &[String]) -> BuiltinResult {
     if args.is_empty() {
@@ -3798,8 +3948,12 @@ fn cmd_read(args: &[String], env: &mut Env) -> BuiltinResult {
                         for (i, word) in words.iter().enumerate() {
                             env.set_local(&format!("{}_{}", array_name, i), word);
                         }
-                        env.set_local(&format!("{}[@]", array_name), &words.join(" "));
-                        env.set_local(&format!("{}[#]", array_name), &words.len().to_string());
+                        // Drop stale elements left over from a previous read.
+                        let mut i = words.len();
+                        while env.get(&format!("{}_{}", array_name, i)).is_some() {
+                            env.unset(&format!("{}_{}", array_name, i));
+                            i += 1;
+                        }
                     } else if var_names.is_empty() {
                         env.set("REPLY", &line);
                     } else if var_names.len() == 1 {
@@ -3832,8 +3986,75 @@ fn cmd_read(args: &[String], env: &mut Env) -> BuiltinResult {
     let stdin = std::io::stdin();
     let mut line = String::new();
     let mut chars_read: usize = 0;
+    let mut pending_utf8: Vec<u8> = Vec::new();
     let start = std::time::Instant::now();
-    loop {
+
+    // Read a single byte from the chosen fd, or None on EOF/error.
+    macro_rules! read_byte {
+        () => {{
+            let mut buf = [0u8; 1];
+            let ok = if let Some(fd) = read_fd {
+                let n = unsafe { libc::read(fd, buf.as_mut_ptr() as *mut libc::c_void, 1) };
+                n > 0
+            } else {
+                std::io::Read::read(&mut stdin.lock(), &mut buf).unwrap_or(0) > 0
+            };
+            if ok { Some(buf[0]) } else { None }
+        }};
+    }
+
+    // Handle one decoded character. `stop` carries an early exit status.
+    macro_rules! process_char {
+        ($ch:expr, $stop:expr, $saw_delim:expr) => {{
+            let ch: char = $ch;
+            if ch == delim {
+                $saw_delim = true;
+            } else if ch == '\x03' {
+                eprintln!("^C");
+                $stop = Some(130);
+            } else if ch == '\x04' && line.is_empty() {
+                $stop = Some(1);
+            } else if ch == '\x7f' || ch == '\x08' {
+                line.pop();
+                if !silent {
+                    eprint!("\x1b[2D \x1b[2D");
+                    let _ = std::io::stderr().flush();
+                }
+            } else if !raw && ch == '\\' && pending_utf8.is_empty() {
+                match read_byte!() {
+                    None => {}
+                    Some(next_byte) => match next_byte as char {
+                        '\n' => {}
+                        'n' => { line.push('\n'); chars_read += 1; }
+                        't' => { line.push('\t'); chars_read += 1; }
+                        '\\' => { line.push('\\'); chars_read += 1; }
+                        _ => {
+                            // Keep escape semantics for ASCII; multibyte is
+                            // pushed through the UTF-8 accumulator below.
+                            if next_byte.is_ascii() {
+                                line.push('\\');
+                                line.push(next_byte as char);
+                                chars_read += 2;
+                            } else {
+                                line.push('\\');
+                                chars_read += 1;
+                                pending_utf8.push(next_byte);
+                            }
+                        }
+                    },
+                }
+            } else {
+                line.push(ch);
+                chars_read += 1;
+                if !silent {
+                    eprint!("{}", ch);
+                    let _ = std::io::stderr().flush();
+                }
+            }
+        }};
+    }
+
+    'outer: loop {
         if let Some(t) = timeout
             && !t.is_zero() && start.elapsed() >= t {
                 break;
@@ -3842,65 +4063,67 @@ fn cmd_read(args: &[String], env: &mut Env) -> BuiltinResult {
             && chars_read >= max {
                 break;
             }
-        let mut buf = [0u8; 1];
-        let read_ok = if let Some(fd) = read_fd {
-            let n = unsafe { libc::read(fd, buf.as_mut_ptr() as *mut libc::c_void, 1) };
-            n > 0
-        } else {
-            std::io::Read::read(&mut stdin.lock(), &mut buf).unwrap_or(0) > 0
-        };
-        if !read_ok {
-            break;
+
+        // Poll with the remaining time so `-t` fires even while blocked.
+        if let Some(t) = timeout.filter(|t| !t.is_zero()) {
+            let fd = read_fd.unwrap_or(libc::STDIN_FILENO);
+            let elapsed = start.elapsed();
+            let remain_ms = if elapsed >= t { 0 } else { (t - elapsed).as_millis() as i32 };
+            let mut pollfd = libc::pollfd {
+                fd,
+                events: libc::POLLIN,
+                revents: 0,
+            };
+            let ret = unsafe { libc::poll(&mut pollfd, 1, remain_ms) };
+            if ret == 0 {
+                break; // timed out while idle
+            }
         }
-        {
-                let ch = buf[0] as char;
-                if ch == delim {
-                    break;
-                }
-                if ch == '\x03' {
-                    eprintln!("^C");
-                    return BuiltinResult::err(130);
-                }
-                if ch == '\x04' && line.is_empty() {
-                    return BuiltinResult::err(1);
-                }
-                if ch == '\x7f' || ch == '\x08' {
-                    line.pop();
-                    if !silent {
-                        eprint!("\x1b[2D \x1b[2D");
-                        let _ = std::io::stderr().flush();
-                    }
-                    continue;
-                }
-                if !raw && ch == '\\' {
-                    let mut next_buf = [0u8; 1];
-                    let next_ok = if let Some(fd) = read_fd {
-                        let n = unsafe { libc::read(fd, next_buf.as_mut_ptr() as *mut libc::c_void, 1) };
-                        n > 0
-                    } else {
-                        std::io::Read::read(&mut stdin.lock(), &mut next_buf).unwrap_or(0) > 0
+
+        let Some(byte) = read_byte!() else { break };
+        pending_utf8.push(byte);
+
+        // Incrementally decode complete UTF-8 sequences.
+        loop {
+            match std::str::from_utf8(&pending_utf8) {
+                Ok(text) => {
+                    let Some(ch) = text.chars().next() else {
+                        pending_utf8.clear();
+                        break;
                     };
-                    if next_ok {
-                        let next = next_buf[0] as char;
-                        match next {
-                            '\n' => {
-                                continue;
-                            }
-                            'n' => { line.push('\n'); }
-                            't' => { line.push('\t'); }
-                            '\\' => { line.push('\\'); }
-                            _ => { line.push('\\'); line.push(next); }
-                        }
-                        chars_read += 1;
+                    pending_utf8.drain(..ch.len_utf8());
+                    let mut stop: Option<i32> = None;
+                    let mut saw_delim = false;
+                    process_char!(ch, stop, saw_delim);
+                    if let Some(code) = stop {
+                        return BuiltinResult::err(code);
                     }
-                    continue;
+                    if saw_delim {
+                        break 'outer;
+                    }
+                    if pending_utf8.is_empty() { break; }
                 }
-                line.push(ch);
-                chars_read += 1;
-                if !silent {
-                    eprint!("{}", ch);
-                    let _ = std::io::stderr().flush();
+                Err(e) => {
+                    match e.error_len() {
+                        None => break, // need more bytes for this sequence
+                        Some(inv) => {
+                            let bad: Vec<u8> = pending_utf8.drain(..inv).collect();
+                            let lossy = String::from_utf8_lossy(&bad).to_string();
+                            for ch in lossy.chars() {
+                                let mut stop: Option<i32> = None;
+                                let mut saw_delim = false;
+                                process_char!(ch, stop, saw_delim);
+                                if let Some(code) = stop {
+                                    return BuiltinResult::err(code);
+                                }
+                                if saw_delim {
+                                    break 'outer;
+                                }
+                            }
+                        }
+                    }
                 }
+            }
         }
     }
 
@@ -3925,8 +4148,12 @@ fn cmd_read(args: &[String], env: &mut Env) -> BuiltinResult {
         for (i, word) in words.iter().enumerate() {
             env.set_local(&format!("{}_{}", array_name, i), word);
         }
-        env.set_local(&format!("{}[@]", array_name), &words.join(" "));
-        env.set_local(&format!("{}[#]", array_name), &words.len().to_string());
+        // Drop stale elements left over from a previous read.
+        let mut i = words.len();
+        while env.get(&format!("{}_{}", array_name, i)).is_some() {
+            env.unset(&format!("{}_{}", array_name, i));
+            i += 1;
+        }
     } else if var_names.is_empty() {
         env.set("REPLY", &line);
     } else if var_names.len() == 1 {
@@ -4251,8 +4478,8 @@ fn cmd_times() -> BuiltinResult {
         let frac = ((secs - whole as f64) * 100.0) as u64;
         format!("{}.{:02}", whole, frac)
     };
-    println!("\t{} \t{}", format(t.tms_cutime), format(t.tms_cstime));
     println!("\t{} \t{}", format(t.tms_utime), format(t.tms_stime));
+    println!("\t{} \t{}", format(t.tms_cutime), format(t.tms_cstime));
     BuiltinResult::ok()
 }
 
@@ -4269,18 +4496,10 @@ fn cmd_logout() -> BuiltinResult {
 }
 
 fn cmd_enable(args: &[String], _env: &mut Env, cfg: &Config) -> BuiltinResult {
-    let all_builtins = [
-        ":", "cd", "exit", "export", "unset", "alias", "unalias", "source", "history",
-        "set", "env", "pwd", "type", "which", "echo", "printf", "test", "let", "trap",
-        "pushd", "popd", "dirs", "hash", "math", "regexmatch", "module", "readonly",
-        "builtin", "shopt", "enable", "declare", "typeset", "local", "exec", ".", "false",
-        "true", "shift", "wait", "kill", "umask", "command", "eval", "select", "getopts",
-        "realpath", "help", "ulimit", "times", "logout", "mapfile", "readarray", "compgen",
-        "complete",
-    ];
+    let all_builtins = BUILTINS;
     if args.is_empty() {
         let disabled = DISABLED_BUILTINS.lock().unwrap();
-        for name in &all_builtins {
+        for name in all_builtins {
             let status = if disabled.contains(*name) { "off" } else { "on" };
             println!("{}={}", name, status);
         }
@@ -4652,24 +4871,55 @@ fn cmd_fc(args: &[String], env: &mut Env, _cfg: &Config) -> BuiltinResult {
         .unwrap_or_else(|| "vi".to_string());
 
     let joined: String = history[slice_start..slice_end].join("\n");
-    let tmp_path = "/tmp/.ctx_fc";
-    let _ = std::fs::write(tmp_path, &joined);
-    let status = std::process::Command::new(&editor_cmd).arg(tmp_path).status();
+    // Random, exclusively-created tempfile under $TMPDIR (symlink-safe).
+    use std::fs::OpenOptions;
+    use std::os::unix::fs::OpenOptionsExt;
+    let tmp_dir = std::env::temp_dir();
+    let mut tmp_path = std::path::PathBuf::new();
+    for _ in 0..64 {
+        let rand: u64 = (unsafe { libc::rand() } as u64) << 32
+            ^ std::process::id() as u64
+            ^ std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.subsec_nanos() as u64)
+                .unwrap_or(0);
+        let candidate = tmp_dir.join(format!(".ctx_fc_{:x}", rand));
+        match OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(0o600)
+            .open(&candidate) {
+                Ok(mut f) => {
+                    use std::io::Write;
+                    if f.write_all(joined.as_bytes()).is_ok() {
+                        tmp_path = candidate;
+                        break;
+                    }
+                }
+                Err(_) => continue,
+            }
+    }
+    if tmp_path.as_os_str().is_empty() {
+        eprintln!("context: fc: failed to create temporary file");
+        return BuiltinResult::err(1);
+    }
+    let tmp_str = tmp_path.to_string_lossy().to_string();
+    let status = std::process::Command::new(&editor_cmd).arg(&tmp_str).status();
     match status {
         Ok(s) if s.success() => {
-            if let Ok(edited) = std::fs::read_to_string(tmp_path) {
+            if let Ok(edited) = std::fs::read_to_string(&tmp_str) {
                 let cmd = edited.trim().to_string();
-                let _ = std::fs::remove_file(tmp_path);
+                let _ = std::fs::remove_file(&tmp_str);
                 if !cmd.is_empty() {
                     exec_cmd(&cmd);
                     return BuiltinResult::ok();
                 }
             }
-            let _ = std::fs::remove_file(tmp_path);
+            let _ = std::fs::remove_file(&tmp_str);
             BuiltinResult::err(1)
         }
         _ => {
-            let _ = std::fs::remove_file(tmp_path);
+            let _ = std::fs::remove_file(&tmp_str);
             BuiltinResult::err(1)
         }
     }
@@ -4866,8 +5116,12 @@ fn cmd_mapfile(args: &[String], env: &mut Env) -> BuiltinResult {
         env.set(&format!("{}_{}", array_name, origin + idx), &val);
     }
 
-    env.set(&format!("{}[@]", array_name), &lines.join(" "));
-    env.set(&format!("{}[#]", array_name), &lines.len().to_string());
+    // Drop stale elements beyond the new content.
+    let mut i = origin + lines.len();
+    while env.get(&format!("{}_{}", array_name, i)).is_some() {
+        env.unset(&format!("{}_{}", array_name, i));
+        i += 1;
+    }
     BuiltinResult::ok()
 }
 
@@ -5634,7 +5888,7 @@ mod tests {
     #[test]
     fn test_test_empty_args() {
         let result = cmd_test(&[]);
-        assert_eq!(result.status, 2);
+        assert_eq!(result.status, 1);
     }
 
     #[test]
@@ -5922,4 +6176,85 @@ mod tests {
         let result = run(&["printf".into(), "%s\n".into(), "hello".into()], &mut env, &cfg, 0);
         assert_eq!(result.status, 0);
     }
+
+    // C1: arithmetic comparisons, shifts and conditional operator must flow
+    // through the full precedence chain (comma → conditional → …).
+    #[test]
+    fn test_arithmetic_comparisons() {
+        let env = make_env();
+        assert_eq!(eval_arithmetic("3 < 5", &env), 1);
+        assert_eq!(eval_arithmetic("5 < 3", &env), 0);
+        assert_eq!(eval_arithmetic("3 > 5", &env), 0);
+        assert_eq!(eval_arithmetic("2 <= 2", &env), 1);
+        assert_eq!(eval_arithmetic("3 >= 4", &env), 0);
+        assert_eq!(eval_arithmetic("1 == 1", &env), 1);
+        assert_eq!(eval_arithmetic("1 != 1", &env), 0);
+        assert_eq!(eval_arithmetic("(3 < 5) && (2 > 1)", &env), 1);
+        assert_eq!(eval_arithmetic("(3 < 5) || (2 < 1)", &env), 1);
+        assert_eq!(eval_arithmetic("1 << 4", &env), 16);
+        assert_eq!(eval_arithmetic("256 >> 4", &env), 16);
+        assert_eq!(eval_arithmetic("1 ? 10 : 20", &env), 10);
+        assert_eq!(eval_arithmetic("0 ? 10 : 20", &env), 20);
+        assert_eq!(eval_arithmetic("1 + 2 * 3", &env), 7);
+        assert_eq!(eval_arithmetic("(1 + 2) * 3", &env), 9);
+    }
+
+    // C7: printf `%.*s` must truncate on char boundaries, never on bytes.
+    #[test]
+    fn test_printf_precision_multibyte() {
+        let mut env = make_env();
+        let cfg = Config::default();
+        let emoji = "\u{1F600}x";
+        let r = run(&["printf".into(), "%.2s\n".into(), emoji.into()], &mut env, &cfg, 0);
+        assert_eq!(r.status, 0);
+        let r = run(&["printf".into(), "%.1s".into(), emoji.into()], &mut env, &cfg, 0);
+        assert_eq!(r.status, 0);
+        let r = run(&["printf".into(), "%.2s|%.0s\n".into(), emoji.into(), "y".into()], &mut env, &cfg, 0);
+        assert_eq!(r.status, 0);
+    }
+
+    // M9: every dispatched builtin is reachable through BUILTINS.
+    #[test]
+    fn test_builtins_dispatch_list() {
+        for name in ["mapfile", "readarray", "help", "ulimit", "times", "logout",
+                     "suspend", "printf"] {
+            assert!(BUILTINS.contains(&name), "{} missing from BUILTINS", name);
+        }
+        let mut env = make_env();
+        let cfg = Config::default();
+        let result = run(&["printf".into(), "%d\n".into(), "5".into()], &mut env, &cfg, 0);
+        assert_eq!(result.status, 0);
+    }
+
+    // M10: indexed arrays store arr_N elements; @/# expansion reads them.
+    #[test]
+    fn test_indexed_array_read_elements() {
+        let mut env = make_env();
+        env.indexed_array_set("arr", "0", "one");
+        env.indexed_array_set("arr", "1", "two");
+        assert!(env.is_indexed_array("arr"));
+        assert_eq!(env.indexed_array_get("arr", "0"), Some("one"));
+        assert_eq!(env.indexed_array_get("arr", "1"), Some("two"));
+        assert_eq!(env.indexed_array_len("arr"), 2);
+        assert_eq!(env.indexed_array_elements("arr"), vec!["one", "two"]);
+        let bg_pid = 0;
+        {
+            let mut expander = crate::shell::expand::Expander::new(&mut env, 0, vec![], bg_pid);
+            assert_eq!(expander.expand_word("${arr[@]}"), "one two");
+            assert_eq!(expander.expand_word("${arr[*]}"), "one two");
+            assert_eq!(expander.expand_word("${arr[#]}"), "2");
+            assert_eq!(expander.expand_word("${arr[0]}"), "one");
+        }
+    }
+
+    // M24: `cd -L` builds a logical PWD (no symlink resolution).
+    #[test]
+    fn test_logical_path_cd_l() {
+        assert_eq!(logical_path("/tmp", "/tmp/symtest"), "/tmp/symtest");
+        assert_eq!(logical_path("/home/user", "docs"), "/home/user/docs");
+        assert_eq!(logical_path("/home/user", ".."), "/home");
+        assert_eq!(logical_path("/", "etc"), "/etc");
+        assert_eq!(logical_path("/a/b/", "c"), "/a/b/c");
+    }
 }
+

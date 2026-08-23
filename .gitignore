@@ -14,3 +14,10 @@ target/
 .DS_Store
 Thumbs.db
 *.log
+# Meson/Ninja build dir + generated cross file
+builddir/
+scripts/cross.txt
+
+# Python cache
+__pycache__/
+*.pyc

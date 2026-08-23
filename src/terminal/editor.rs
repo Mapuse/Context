@@ -679,7 +679,7 @@ fn exec_widget(widget: &str, input: &mut String, cursor_pos: &mut usize, history
     }
 }
 
-fn is_input_incomplete(input: &str) -> bool {
+pub fn is_input_incomplete(input: &str) -> bool {
     if input.is_empty() {
         return false;
     }
@@ -699,6 +699,17 @@ fn is_input_incomplete(input: &str) -> bool {
         }
     }
     if bs_count % 2 == 1 {
+        return true;
+    }
+
+    // Unterminated heredoc: `<<[-]DELIM` whose delimiter line never came.
+    if heredoc_unterminated(input) {
+        return true;
+    }
+
+    // Unterminated block constructs (if/fi, for|while|until/do/done,
+    // case/esac, brace groups).
+    if block_construct_unterminated(input) {
         return true;
     }
 
@@ -738,6 +749,152 @@ fn is_input_incomplete(input: &str) -> bool {
         i += 1;
     }
     in_single || in_double || cmd_sub_depth > 0
+}
+
+/// True when the input contains an unclosed `if`, loop, `case` or brace
+/// group. Quote-aware and comment-aware word scan; best-effort.
+fn block_construct_unterminated(input: &str) -> bool {
+    let mut if_depth = 0i32;
+    let mut loop_depth = 0i32;
+    let mut case_depth = 0i32;
+    let mut brace_depth = 0i32;
+    for line in input.lines() {
+        for tok in shell_words(line) {
+            match tok.trim_end_matches(';') {
+                "if" => if_depth += 1,
+                "fi" => if_depth -= 1,
+                "for" | "while" | "until" | "select" => loop_depth += 1,
+                "done" => loop_depth -= 1,
+                "case" => case_depth += 1,
+                "esac" => case_depth -= 1,
+                "{" => brace_depth += 1,
+                "}" => brace_depth -= 1,
+                _ => {}
+            }
+        }
+    }
+    if_depth > 0 || loop_depth > 0 || case_depth > 0 || brace_depth > 0
+}
+
+/// Split a line into unquoted words (quotes stripped, contents marked as
+/// non-keywords via a `\u{1}` guard), stopping at an unquoted `#` comment.
+fn shell_words(line: &str) -> Vec<String> {
+    let mut words = Vec::new();
+    let mut cur = String::new();
+    let mut quoted = false;
+    let mut in_single = false;
+    let mut in_double = false;
+    for c in line.chars() {
+        if in_single {
+            if c == '\'' { in_single = false; } else { quoted = true; }
+            continue;
+        }
+        if in_double {
+            match c {
+                '"' => in_double = false,
+                '\\' => { quoted = true; }
+                _ => quoted = true,
+            }
+            continue;
+        }
+        match c {
+            '\'' => { in_single = true; quoted = true; }
+            '"' => { in_double = true; quoted = true; }
+            '\\' => { quoted = true; }
+            '#' if cur.is_empty() && !quoted => break,
+            c if c.is_whitespace() => {
+                if !cur.is_empty() {
+                    words.push(std::mem::take(&mut cur));
+                    quoted = false;
+                }
+            }
+            c => cur.push(c),
+        }
+    }
+    // A trailing backslash-continuation or quote leaves `quoted` set; the
+    // caller already treats those as incomplete.
+    if !cur.is_empty() && !quoted {
+        words.push(cur);
+    }
+    words
+}
+
+/// True when the input contains a `<<` redirection whose delimiter line has
+/// not appeared yet. Best-effort: quotes around the delimiter are honored.
+fn heredoc_unterminated(input: &str) -> bool {
+    let mut pending: Vec<(String, bool)> = Vec::new();
+    for line in input.lines() {
+        // Delimiter check first: this line may close earlier heredocs.
+        if !pending.is_empty() {
+            let stripped = line.trim_start_matches('\t');
+            let mut consumed = false;
+            pending.retain(|(delim, _)| {
+                if !consumed && stripped == delim {
+                    consumed = true;
+                    false
+                } else {
+                    true
+                }
+            });
+            if !pending.is_empty() && !line.contains("<<") {
+                continue;
+            }
+        }
+        // Scan the line for `<<` operators (outside single/double quotes).
+        let bytes: Vec<char> = line.chars().collect();
+        let n = bytes.len();
+        let mut i = 0;
+        let mut in_single = false;
+        let mut in_double = false;
+        while i < n {
+            let c = bytes[i];
+            if in_single {
+                if c == '\'' { in_single = false; }
+                i += 1;
+                continue;
+            }
+            if in_double {
+                if c == '"' { in_double = false; }
+                if c == '\\' { i += 1; }
+                i += 1;
+                continue;
+            }
+            match c {
+                '\'' => in_single = true,
+                '"' => in_double = true,
+                '\\' => { i += 1; }
+                '<' if i + 1 < n && bytes[i + 1] == '<'
+                    && !(i + 2 < n && bytes[i + 2] == '<') => {
+                        // Found a heredoc operator; read the delimiter word.
+                        let mut j = i + 2;
+                        let strip_tabs = j < n && bytes[j] == '-';
+                        if strip_tabs { j += 1; }
+                        while j < n && bytes[j].is_whitespace() { j += 1; }
+                        let (delim, next) = if j < n && (bytes[j] == '\'' || bytes[j] == '"') {
+                            let quote = bytes[j];
+                            let start = j + 1;
+                            let mut k = start;
+                            while k < n && bytes[k] != quote { k += 1; }
+                            (bytes[start..k.min(n)].iter().collect::<String>(), k + 1)
+                        } else {
+                            let start = j;
+                            let mut k = j;
+                            while k < n && !bytes[k].is_whitespace()
+                                && !";&|<>()".contains(bytes[k]) { k += 1; }
+                            (bytes[start..k].iter().collect::<String>(), k)
+                        };
+                        if !delim.is_empty() {
+                            pending.push((delim, strip_tabs));
+                        }
+                        i = next.max(i + 2);
+                        continue;
+                    }
+                _ => {}
+            }
+            i += 1;
+        }
+    }
+    !pending.is_empty()
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -834,7 +991,7 @@ pub fn read_line_editor(
                         break;
                     }
                     if ch == '\r' || ch == '\n' {
-                        input.push('\n');
+                        insert_char_at(&mut input, cursor_pos, '\n');
                     } else {
                         insert_char_at(&mut input, cursor_pos, ch);
                     }
@@ -975,6 +1132,15 @@ pub fn read_line_editor(
                                 cursor_pos = pos;
                                 redraw(&rctx, &input, cursor_pos, &suggestion)?;
                             }
+                            KeyCode::Char('B') if !modifiers.contains(KeyModifiers::CONTROL) => {
+                                // vi B — move back to start of previous WORD (whitespace-delimited)
+                                let chars: Vec<char> = input.chars().collect();
+                                let mut pos = cursor_pos;
+                                while pos > 0 && chars[pos - 1].is_whitespace() { pos -= 1; }
+                                while pos > 0 && !chars[pos - 1].is_whitespace() { pos -= 1; }
+                                cursor_pos = pos;
+                                redraw(&rctx, &input, cursor_pos, &suggestion)?;
+                            }
                             KeyCode::Char('b') if !modifiers.contains(KeyModifiers::CONTROL) => {
                                 let chars: Vec<char> = input.chars().collect();
                                 let delims: Vec<char> = editor_cfg.word_delimiters.chars().collect();
@@ -1049,6 +1215,14 @@ pub fn read_line_editor(
                                 kill_ring_push(&killed);
                                 input.truncate(char_to_byte(&input, cursor_pos));
                                 redraw(&rctx, &input, cursor_pos, &suggestion)?;
+                            }
+                            KeyCode::Char('y') if !modifiers.contains(KeyModifiers::CONTROL) && last_vi_action.as_deref() != Some("y") => {
+                                last_vi_action = Some("y".to_string());
+                            }
+                            KeyCode::Char('y') if last_vi_action.as_deref() == Some("y") => {
+                                // yy — yank the current line (whole buffer in shell editing)
+                                kill_ring_push(&input);
+                                last_vi_action = None;
                             }
                             KeyCode::Char('p') if !modifiers.contains(KeyModifiers::CONTROL) => {
                                 if let Some(yanked) = kill_ring_yank() {
@@ -1923,9 +2097,15 @@ pub fn read_line_editor(
                                     cursor_pos += 1;
                                 } else if editor_cfg.auto_match_quotes && (c == '"' || c == '\'') {
                                     push_undo(&input, cursor_pos);
-                                    insert_char_at(&mut input, cursor_pos, c);
-                                    cursor_pos += 1;
-                                    insert_char_at(&mut input, cursor_pos, c);
+                                    if input.chars().nth(cursor_pos) == Some(c) {
+                                        // Typing the closing quote skips over
+                                        // the auto-inserted matching quote.
+                                        cursor_pos += 1;
+                                    } else {
+                                        insert_char_at(&mut input, cursor_pos, c);
+                                        cursor_pos += 1;
+                                        insert_char_at(&mut input, cursor_pos, c);
+                                    }
                                 } else {
                                     push_undo(&input, cursor_pos);
                                     insert_char_at(&mut input, cursor_pos, c);
@@ -1950,6 +2130,29 @@ pub fn read_line_editor(
     }
 }
 
+/// Move the physical cursor to `cursor_pos` characters into `input`,
+/// computed in display columns (wide chars count double) and honoring
+/// terminal line wrapping.
+fn position_cursor(prefix: &str, input: &str, cursor_pos: usize, suggestion: &str) {
+    let w = crate::terminal::prompt::get_terminal_width().max(1);
+    let prefix_vis = crate::terminal::color::visible_len(prefix);
+    let before: String = input.chars().take(cursor_pos).collect();
+    let cursor_cols = prefix_vis + crate::terminal::color::visible_len(&before);
+    let total_cols = prefix_vis
+        + crate::terminal::color::visible_len(input)
+        + crate::terminal::color::visible_len(suggestion);
+    let end_row = total_cols / w;
+    let target_row = cursor_cols / w;
+    if end_row > target_row {
+        print!("\x1b[{}A", end_row - target_row);
+    }
+    print!("\r");
+    let col = cursor_cols % w;
+    if col > 0 {
+        print!("\x1b[{}C", col);
+    }
+}
+
 fn render_display(context: &EditorRenderCtx, input: &str, cursor_pos: usize, suggestion: &str) -> io::Result<()> {
     print!("\x1b[?25l");
     if context.prompt.lines_above.is_empty() {
@@ -1967,9 +2170,10 @@ fn render_display(context: &EditorRenderCtx, input: &str, cursor_pos: usize, sug
 
     if !context.prompt.right_prompt.is_empty() {
         let term_width = crate::terminal::prompt::get_terminal_width();
-        let input_vis = input.chars().count() + suggestion.chars().count();
-        let rprompt_vis = visible_str_len(&context.prompt.right_prompt);
-        let prefix_vis = visible_str_len(&context.prompt.input_prefix);
+        let input_vis = crate::terminal::color::visible_len(input)
+            + crate::terminal::color::visible_len(suggestion);
+        let rprompt_vis = crate::terminal::color::visible_len(&context.prompt.right_prompt);
+        let prefix_vis = crate::terminal::color::visible_len(&context.prompt.input_prefix);
         let threshold = (term_width as f64 * context.prompt.right_prompt_hide_threshold) as usize;
         let occupied = prefix_vis + input_vis;
 
@@ -1983,10 +2187,7 @@ fn render_display(context: &EditorRenderCtx, input: &str, cursor_pos: usize, sug
         }
     }
 
-    let visible_after = input.chars().count() + suggestion.chars().count() - cursor_pos;
-    if visible_after > 0 {
-        print!("\x1b[{}D", visible_after);
-    }
+    position_cursor(&context.prompt.input_prefix, input, cursor_pos, suggestion);
     if !context.prompt.lines_below.is_empty() {
         print!("\r\n");
         for line in &context.prompt.lines_below {
@@ -2022,9 +2223,10 @@ fn redraw(context: &EditorRenderCtx, input: &str, cursor_pos: usize, suggestion:
 
     if !context.prompt.right_prompt.is_empty() {
         let term_width = crate::terminal::prompt::get_terminal_width();
-        let input_vis = input.chars().count() + suggestion.chars().count();
-        let rprompt_vis = visible_str_len(&context.prompt.right_prompt);
-        let prefix_vis = visible_str_len(&context.prompt.input_prefix);
+        let input_vis = crate::terminal::color::visible_len(input)
+            + crate::terminal::color::visible_len(suggestion);
+        let rprompt_vis = crate::terminal::color::visible_len(&context.prompt.right_prompt);
+        let prefix_vis = crate::terminal::color::visible_len(&context.prompt.input_prefix);
         let threshold = (term_width as f64 * context.prompt.right_prompt_hide_threshold) as usize;
         let occupied = prefix_vis + input_vis;
 
@@ -2045,10 +2247,7 @@ fn redraw(context: &EditorRenderCtx, input: &str, cursor_pos: usize, suggestion:
         print!("\x1b[{}A", below_count);
     }
 
-    let visible_after = input.chars().count() + suggestion.chars().count() - cursor_pos;
-    if visible_after > 0 {
-        print!("\x1b[{}D", visible_after);
-    }
+    position_cursor(&context.prompt.input_prefix, input, cursor_pos, suggestion);
     print!("\x1b[?25h");
     io::stdout().flush()
 }
@@ -2062,21 +2261,6 @@ fn color_to_ansi(hex: &str) -> String {
     let g = u8::from_str_radix(&hex[2..4], 16).unwrap_or(128);
     let b = u8::from_str_radix(&hex[4..6], 16).unwrap_or(128);
     format!("\x1b[38;2;{};{};{}m", r, g, b)
-}
-
-fn visible_str_len(s: &str) -> usize {
-    let mut len = 0;
-    let mut chars = s.chars();
-    while let Some(c) = chars.next() {
-        if c == '\x1b' {
-            for next in chars.by_ref() {
-                if next.is_ascii_alphabetic() { break; }
-            }
-        } else if !c.is_control() {
-            len += 1;
-        }
-    }
-    len
 }
 
 fn starts_with_ci(haystack: &str, needle: &[char]) -> bool {

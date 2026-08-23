@@ -457,23 +457,30 @@ fn render_middle(env: &Env, cfg: &Config) -> String {
     if !cfg.prompt.show_user_host {
         return String::new();
     }
-    let formatted = expand_prompt_vars(&cfg.prompt.user_host_format, env, cfg, 0);
     let user_color = hex_to_ansi(&cfg.prompt.color_user);
     let host_color = hex_to_ansi(&cfg.prompt.color_host);
     let user = env.user();
     let hostname = env.hostname();
-    
-    formatted
-        .replace(&user, &format!("{}{}{}", user_color, user, reset()))
-        .replace(&hostname, &format!("{}{}{}", host_color, hostname, reset()))
+
+    // Colorize through the placeholders BEFORE any other expansion so that
+    // dynamic values which merely contain the username as a substring are
+    // never recolored.
+    let pre_colored = cfg.prompt.user_host_format
+        .replace("{user}", &format!("{}{}{}", user_color, user, reset()))
+        .replace("{host}", &format!("{}{}{}", host_color, hostname, reset()));
+    expand_prompt_vars(&pre_colored, env, cfg, 0)
 }
 
 pub fn shorten_cwd(cwd: &str, home: &str, max_depth: u32) -> String {
     if let Some(rest) = cwd.strip_prefix(home) {
+        // Only a whole home-prefix component counts (`/home/user` must not
+        // match `/home/user2`); require end-of-string or a following '/'.
         if rest.is_empty() {
             return "~".into();
         }
-        return format!("~{}", rest);
+        if rest.starts_with('/') {
+            return format!("~{}", rest);
+        }
     }
     if max_depth > 0 {
         let parts: Vec<&str> = cwd.split('/').filter(|s| !s.is_empty()).collect();
@@ -506,8 +513,8 @@ fn find_git_branch() -> String {
             if let Some(branch) = content.strip_prefix("ref: refs/heads/") {
                 return branch.to_string();
             }
-            if !content.is_empty() {
-                return content[..7].to_string();
+            if !content.is_empty() && content.chars().all(|c| c.is_ascii_hexdigit()) {
+                return content.chars().take(7).collect();
             }
         }
         if !dir.pop() {
@@ -1056,24 +1063,42 @@ pub fn expand_prompt_vars(s: &str, env: &Env, cfg: &Config, last_status: i32) ->
         let hh_s = format!("{:02}", hh);
         let mm_s = format!("{:02}", mm);
         let ss_s = format!("{:02}", ss);
-        let mut out = result.clone();
-        out = out.replace("\\u", &username);
-        out = out.replace("\\h", &hostname_short);
-        out = out.replace("\\H", &hostname_full);
-        out = out.replace("\\w", &cwd_display);
-        out = out.replace("\\W", &cwd_base);
-        out = out.replace("\\d", &format!("{} {:02}", mon_name, day));
-        out = out.replace("\\t", &format!("{}:{}:{}", hh_s, mm_s, ss_s));
-        out = out.replace("\\T", &format!("{:02}:{}:{}", hh_12, mm_s, ss_s));
-        out = out.replace("\\@", &format!("{}:{} {}", hh_12, mm_s, am_pm));
-        out = out.replace("\\!", &HIST_COUNT.load(Ordering::Relaxed).to_string());
-        out = out.replace("\\#", &COMMAND_COUNT.load(Ordering::Relaxed).to_string());
-        out = out.replace("\\n", "\n");
-        out = out.replace("\\$", prompt_char);
-        out = out.replace("\\v", vv);
-        out = out.replace("\\V", &format!("{}-dev", vv));
-        out = out.replace("\\e", "\x1b");
-        out = out.replace("\\s", ss_name);
+        // Single left-to-right scan: inserted values are never re-scanned,
+        // so usernames/cwd containing `\t`, `\u` etc. stay intact.
+        let mut out = String::with_capacity(result.len());
+        {
+            let mut chars = result.chars().peekable();
+            macro_rules! take_escape {
+                ($val:expr) => {{ chars.next(); out.push_str(&$val); }};
+            }
+            while let Some(c) = chars.next() {
+                if c != '\\' {
+                    out.push(c);
+                    continue;
+                }
+                match chars.peek().copied() {
+                    Some('u') => take_escape!(username),
+                    Some('h') => take_escape!(hostname_short),
+                    Some('H') => take_escape!(hostname_full),
+                    Some('w') => take_escape!(cwd_display),
+                    Some('W') => take_escape!(cwd_base),
+                    Some('d') => take_escape!(format!("{} {:02}", mon_name, day)),
+                    Some('t') => take_escape!(format!("{}:{}:{}", hh_s, mm_s, ss_s)),
+                    Some('T') => take_escape!(format!("{:02}:{}:{}", hh_12, mm_s, ss_s)),
+                    Some('@') => take_escape!(format!("{}:{} {}", hh_12, mm_s, am_pm)),
+                    Some('!') => take_escape!(HIST_COUNT.load(Ordering::Relaxed).to_string()),
+                    Some('#') => take_escape!(COMMAND_COUNT.load(Ordering::Relaxed).to_string()),
+                    Some('n') => take_escape!("\n"),
+                    Some('$') => take_escape!(prompt_char),
+                    Some('v') => take_escape!(vv),
+                    Some('V') => take_escape!(format!("{}-dev", vv)),
+                    Some('e') => take_escape!("\x1b"),
+                    Some('s') => take_escape!(ss_name),
+                    Some('\\') => { chars.next(); out.push('\\'); }
+                    _ => out.push('\\'),
+                }
+            }
+        }
         out
     } else {
         result
@@ -1149,6 +1174,16 @@ mod tests {
         assert_eq!(result, "…/bin/zsh");
     }
 
+    // M20: a home prefix must match a whole component — `/home/user` does
+    // not abbreviate `/home/user2` to `~2`.
+    #[test]
+    fn test_shorten_cwd_component_boundary() {
+        let result = shorten_cwd("/home/user2", "/home/user", 0);
+        assert_eq!(result, "/home/user2");
+        let result = shorten_cwd("/home/users", "/home/user", 0);
+        assert_eq!(result, "/home/users");
+    }
+
     #[test]
     fn test_shorten_cwd_no_shortening_needed() {
         let result = shorten_cwd("/usr/bin", "/home/user", 5);
@@ -1198,5 +1233,19 @@ mod tests {
     fn test_interpret_escapes_hex() {
         let result = interpret_escapes("\\x41");
         assert_eq!(result, "A");
+    }
+}
+
+#[cfg(test)]
+mod m19_m20_tests {
+    use super::shorten_cwd;
+
+    #[test]
+    fn test_shorten_cwd_home_boundary() {
+        // A sibling directory sharing the home prefix must not be tilde'd.
+        assert_eq!(shorten_cwd("/home/user/project", "/home/user", 0), "~/project");
+        assert_eq!(shorten_cwd("/home/user2/x", "/home/user", 0), "/home/user2/x");
+        assert_eq!(shorten_cwd("/home/users/m", "/home/user", 0), "/home/users/m");
+        assert_eq!(shorten_cwd("/home/user", "/home/user", 0), "~");
     }
 }

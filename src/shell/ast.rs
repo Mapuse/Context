@@ -35,6 +35,9 @@ pub enum Node {
         words: Vec<String>,
         redirects: Vec<Redirect>,
         background: bool,
+        /// `FOO=bar cmd` prefix assignments; scoped to this command only
+        /// and exported to external children, never persisted.
+        prefix_env: Vec<(String, String)>,
     },
     Pipeline {
         commands: Vec<Node>,

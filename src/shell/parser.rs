@@ -68,9 +68,6 @@ impl Parser {
                     self.advance();
                     self.skip_newlines();
                     let right = self.parse_and_or();
-                    if right.is_empty() {
-                        return left;
-                    }
                     left = Node::Compound {
                         kind: CompoundKind::Background,
                         left: Box::new(left),
@@ -189,8 +186,8 @@ impl Parser {
         let values = if matches!(self.peek(), Token::In) {
             self.advance();
             let mut vals = Vec::new();
-            while let Token::Word(_) | Token::SingleQuoted(_) | Token::DoubleQuoted(_) = self.peek() {
-                if let Some(v) = self.expect_word() { vals.push(v); }
+            while let Token::Word(_) | Token::SingleQuoted(_) | Token::DoubleQuoted(_) | Token::Backtick(_) = self.peek() {
+                if let Some(v) = self.expect_word_quoted() { vals.push(v); }
             }
             vals
         } else {
@@ -325,32 +322,36 @@ impl Parser {
     fn parse_simple_command(&mut self) -> Node {
         let mut words = Vec::new();
         let mut redirects = Vec::new();
-        let mut background = false;
         loop {
             match self.peek() {
                 Token::Word(_) | Token::SingleQuoted(_) | Token::DoubleQuoted(_) | Token::Backtick(_) => {
-
-                    if let Token::Word(w) = self.peek()
-                        && let Ok(fd_num) = w.parse::<u32>() {
-                            let saved = self.pos;
-                            self.advance();
-                            if matches!(self.peek(),
-                                Token::Greater | Token::DoubleGreater | Token::Less
-                                | Token::LessLess | Token::LessLessLess | Token::LessAmp
-                                | Token::AmpGreater | Token::AmpGreaterGreater
-                                | Token::GreaterPipe | Token::GreaterAmp
-                                | Token::LessGreater)
-                                && let Some(r) = self.parse_redirect_with_fd(Some(fd_num)) {
-                                    redirects.push(r);
-                                    continue;
-                                }
-                            self.pos = saved;
-                        }
                     if let Some(w) = self.expect_word_quoted() {
                         words.push(w);
                     }
                 }
+                Token::IoNumber(n) => {
+                    // Only an fd number directly adjacent to a redirect
+                    // operator (guaranteed by the lexer) is a fd prefix.
+                    let n = n.clone();
+                    let saved = self.pos;
+                    self.advance();
+                    if matches!(self.peek(),
+                        Token::Greater | Token::DoubleGreater | Token::Less
+                        | Token::LessLess | Token::LessLessLess | Token::LessAmp
+                        | Token::AmpGreater | Token::AmpGreaterGreater
+                        | Token::GreaterPipe | Token::GreaterAmp
+                        | Token::LessGreater)
+                        && let Ok(fd_num) = n.parse::<u32>()
+                        && let Some(r) = self.parse_redirect_with_fd(Some(fd_num)) {
+                            redirects.push(r);
+                            continue;
+                        }
+                    self.pos = saved;
+                    words.push(n);
+                    self.advance();
+                }
                 Token::Greater | Token::DoubleGreater | Token::Less | Token::LessLess
+                | Token::LessLessDash
                 | Token::LessLessLess | Token::LessAmp
                 | Token::AmpGreater | Token::AmpGreaterGreater | Token::GreaterPipe
                 | Token::GreaterAmp | Token::LessGreater => {
@@ -364,10 +365,18 @@ impl Parser {
                     let inner = self.collect_balanced_parens();
                     words.push(format!("{}{}", prefix, inner));
                 }
-                Token::Amp => {
-                    self.advance();
-                    background = true;
-                    break;
+                Token::If | Token::Then | Token::Elif | Token::Else | Token::Fi
+                | Token::For | Token::In | Token::Do | Token::Done | Token::While
+                | Token::Until | Token::Case | Token::Esac | Token::Function
+                | Token::Select | Token::Coproc => {
+                    // Reserved words are only special in command position;
+                    // after other words they are ordinary arguments
+                    // (`echo done`, `case $x in` aside).
+                    if words.is_empty() && redirects.is_empty() {
+                        break;
+                    }
+                    let text = self.advance().to_string();
+                    words.push(text);
                 }
                 _ => break,
             }
@@ -376,14 +385,14 @@ impl Parser {
             return Node::Empty;
         }
 
-        let mut assignments = Vec::new();
+        let mut assignments: Vec<(String, String)> = Vec::new();
         let mut cmd_start = 0;
         for (i, w) in words.iter().enumerate() {
             if let Some(eq_pos) = w.find('=')
                 && eq_pos > 0 && !w.starts_with('=') {
                     let name = w[..eq_pos].to_string();
                     let value = w[eq_pos + 1..].to_string();
-                    assignments.push(Node::Assignment { name, value });
+                    assignments.push((name, value));
                     cmd_start = i + 1;
                     continue;
                 }
@@ -391,31 +400,23 @@ impl Parser {
         }
         words = words[cmd_start..].to_vec();
 
+        // Bare assignments (no command word) persist in shell state.
         if words.is_empty() && !assignments.is_empty() {
-            if assignments.len() == 1 {
-                return assignments.remove(0);
-            }
-
-            let mut left = assignments.remove(0);
-            for a in assignments {
+            let mut left = Node::Assignment {
+                name: assignments[0].0.clone(),
+                value: assignments[0].1.clone(),
+            };
+            for (name, value) in assignments.into_iter().skip(1) {
                 left = Node::Compound {
                     kind: CompoundKind::Semicolon,
                     left: Box::new(left),
-                    right: Box::new(a),
+                    right: Box::new(Node::Assignment { name, value }),
                 };
             }
             return left;
         }
 
-        let mut node = Node::Command { words, redirects, background };
-        for a in assignments.into_iter().rev() {
-            node = Node::Compound {
-                kind: CompoundKind::Semicolon,
-                left: Box::new(a),
-                right: Box::new(node),
-            };
-        }
-        node
+        Node::Command { words, redirects, background: false, prefix_env: assignments }
     }
 
     fn parse_redirect(&mut self) -> Option<Redirect> {
@@ -429,31 +430,21 @@ impl Parser {
             Token::Less => { self.advance(); RedirKind::Input }
             Token::LessLess => {
                 self.advance();
-                let delimiter_quoted = matches!(self.peek(), Token::SingleQuoted(_) | Token::DoubleQuoted(_));
-                let raw_delimiter = self.expect_word().unwrap_or_default();
-                let delimiter = raw_delimiter;
-
-                self.skip_newlines();
-                let mut body_lines = Vec::new();
-                loop {
-                    match self.peek() {
-                        Token::Eof => break,
-                        Token::Newline => {
-                            self.advance();
-                            body_lines.push(String::new());
-                            continue;
-                        }
-                        _ => {
-                            let line = self.collect_line_until_newline();
-                            if line.trim_end() == delimiter {
-                                break;
-                            }
-                            body_lines.push(line);
-                        }
+                // The lexer captured the body verbatim; it follows the
+                // operator token directly.
+                let body = match self.peek() {
+                    Token::HereDocBody(body, expand) => {
+                        Some((body.clone(), *expand))
                     }
+                    _ => None,
+                };
+                match body {
+                    Some((body, expand)) => {
+                        self.advance();
+                        RedirKind::HereDocBody(body, expand)
+                    }
+                    None => RedirKind::HereDocBody(String::new(), true),
                 }
-                let body = body_lines.join("\n");
-                RedirKind::HereDocBody(body, !delimiter_quoted)
             }
             Token::AmpGreater => { self.advance(); RedirKind::OutputFd }
             Token::AmpGreaterGreater => { self.advance(); RedirKind::OutputFdAppend }
@@ -461,44 +452,27 @@ impl Parser {
             Token::GreaterAmp => { self.advance(); RedirKind::RedirectFd }
             Token::LessLessDash => {
                 self.advance();
-                let delimiter_quoted = matches!(self.peek(), Token::SingleQuoted(_) | Token::DoubleQuoted(_));
-                let raw_delimiter = self.expect_word().unwrap_or_default();
-                let delimiter = raw_delimiter;
-
-                self.skip_newlines();
-                let mut body_lines = Vec::new();
-                loop {
-                    match self.peek() {
-                        Token::Eof => break,
-                        Token::Newline => {
-                            self.advance();
-                            body_lines.push(String::new());
-                            continue;
-                        }
-                        _ => {
-                            let line = self.collect_line_until_newline();
-                            let line_stripped_tabs: String = line.chars()
-                                .skip_while(|&c| c == '\t')
-                                .collect();
-                            if line_stripped_tabs.trim_end() == delimiter {
-                                break;
-                            }
-                            let stripped: String = line.chars()
-                                .skip_while(|&c| c == '\t')
-                                .collect();
-                            body_lines.push(stripped);
-                        }
+                // `<<-` bodies were tab-stripped by the lexer as well.
+                let body = match self.peek() {
+                    Token::HereDocBody(body, expand) => {
+                        Some((body.clone(), *expand))
                     }
+                    _ => None,
+                };
+                match body {
+                    Some((body, expand)) => {
+                        self.advance();
+                        RedirKind::HereDocBody(body, expand)
+                    }
+                    None => RedirKind::HereDocBody(String::new(), true),
                 }
-                let body = body_lines.join("\n");
-                RedirKind::HereDocBody(body, !delimiter_quoted)
             }
             Token::LessLessLess => {
                 self.advance();
+                // Herestring takes exactly ONE word; the rest of the line
+                // continues the command normally.
                 let word = self.expect_word().unwrap_or_default();
-                let rest = self.collect_line_until_newline();
-                let content = if rest.is_empty() { word } else { format!("{} {}", word, rest) };
-                RedirKind::HereString(content)
+                RedirKind::HereString(word)
             }
             Token::LessAmp => { self.advance(); RedirKind::InputFd }
             Token::LessGreater => { self.advance(); RedirKind::RedirectOpen }
@@ -510,27 +484,6 @@ impl Parser {
             self.expect_word().unwrap_or_default()
         };
         Some(Redirect { fd, kind, target })
-    }
-
-    fn collect_line_until_newline(&mut self) -> String {
-        let mut line = String::new();
-        loop {
-            match self.peek() {
-                Token::Newline | Token::Eof => {
-                    self.advance();
-                    break;
-                }
-                _ => {
-                    let s = self.peek().to_string();
-                    self.advance();
-                    if !line.is_empty() && !s.is_empty() {
-                        line.push(' ');
-                    }
-                    line.push_str(&s);
-                }
-            }
-        }
-        line
     }
 
     fn parse_subshell(&mut self) -> Node {
@@ -654,8 +607,8 @@ impl Parser {
         let values = if matches!(self.peek(), Token::In) {
             self.advance();
             let mut vals = Vec::new();
-            while let Token::Word(_) | Token::SingleQuoted(_) | Token::DoubleQuoted(_) = self.peek() {
-                if let Some(v) = self.expect_word() { vals.push(v); }
+            while let Token::Word(_) | Token::SingleQuoted(_) | Token::DoubleQuoted(_) | Token::Backtick(_) = self.peek() {
+                if let Some(v) = self.expect_word_quoted() { vals.push(v); }
             }
             vals
         } else {
@@ -997,10 +950,10 @@ mod tests {
     fn test_background() {
         let ast = parse(tokenize("sleep 10 &"));
         match ast {
-            Node::Command { background, .. } => {
-                assert!(background);
+            Node::Compound { kind: CompoundKind::Background, left, .. } => {
+                assert!(matches!(*left, Node::Command { .. }));
             }
-            _ => panic!("expected background Command"),
+            _ => panic!("expected Background compound"),
         }
     }
 
@@ -1207,8 +1160,47 @@ mod tests {
                 assert_eq!(redirects.len(), 1);
                 match &redirects[0].kind {
                     RedirKind::HereDocBody(body, expand) => {
-                        assert_eq!(body, "hello $USER");
+                        assert_eq!(body, "hello $USER\n");
                         assert!(!expand);
+                    }
+                    _ => panic!("expected HereDocBody"),
+                }
+            }
+            _ => panic!("expected Command with heredoc"),
+        }
+    }
+
+    #[test]
+    fn test_heredoc_verbatim_spacing() {
+        let tokens = tokenize("cat <<EOF\nhello    world\t!\n  indented\nEOF\necho done");
+        let mut p = Parser::new(tokens);
+        let ast = p.parse();
+        match ast {
+            Node::Compound { kind: CompoundKind::Semicolon, left, right } => {
+                assert!(matches!(*left, Node::Command { .. }));
+                assert!(matches!(*right, Node::Command { .. }));
+                if let Node::Command { redirects, .. } = *left {
+                    match &redirects[0].kind {
+                        RedirKind::HereDocBody(body, expand) => {
+                            assert_eq!(body, "hello    world\t!\n  indented\n");
+                            assert!(*expand);
+                        }
+                        _ => panic!("expected HereDocBody"),
+                    }
+                }
+            }
+            other => panic!("expected Semicolon list, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_heredoc_dash_strips_tabs() {
+        let ast = parse(tokenize("cat <<-EOF\n\ttabbed line\n\tEOF"));
+        match ast {
+            Node::Command { redirects, .. } => {
+                match &redirects[0].kind {
+                    RedirKind::HereDocBody(body, _) => {
+                        assert_eq!(body, "tabbed line\n");
                     }
                     _ => panic!("expected HereDocBody"),
                 }
@@ -1250,11 +1242,26 @@ mod tests {
     fn test_background_command() {
         let ast = parse(tokenize("cmd &"));
         match ast {
-            Node::Command { background, words, .. } => {
-                assert!(background);
-                assert_eq!(words, vec!["cmd"]);
+            Node::Compound { kind: CompoundKind::Background, left, right } => {
+                match *left {
+                    Node::Command { words, .. } => assert_eq!(words, vec!["cmd"]),
+                    _ => panic!("expected background Command"),
+                }
+                assert!(matches!(*right, Node::Empty));
             }
-            _ => panic!("expected background Command"),
+            _ => panic!("expected Background compound"),
+        }
+    }
+
+    #[test]
+    fn test_background_list_continues() {
+        let ast = parse(tokenize("echo a & echo b"));
+        match ast {
+            Node::Compound { kind: CompoundKind::Background, left, right } => {
+                assert!(matches!(*left, Node::Command { .. }));
+                assert!(matches!(*right, Node::Command { .. }));
+            }
+            _ => panic!("expected Background compound with following command"),
         }
     }
 
@@ -1338,7 +1345,12 @@ mod tests {
     #[test]
     fn test_double_amp_background() {
         let ast = parse(tokenize("echo a && echo b &"));
-        assert!(matches!(ast, Node::Compound { kind: CompoundKind::And, .. }));
+        match ast {
+            Node::Compound { kind: CompoundKind::Background, left, .. } => {
+                assert!(matches!(*left, Node::Compound { kind: CompoundKind::And, .. }));
+            }
+            _ => panic!("expected Background compound wrapping And"),
+        }
     }
 
     #[test]
@@ -1439,4 +1451,41 @@ mod tests {
             _ => panic!("expected Function"),
         }
     }
+
+    // C5: `cmd & cmd2` wraps the left side in a Background compound and the
+    // right side still runs — no `&` is consumed inside the simple command.
+    #[test]
+    fn test_background_list() {
+        let ast = parse(tokenize("echo a & echo b"));
+        match ast {
+            Node::Compound { kind: CompoundKind::Background, left, right } => {
+                match *left {
+                    Node::Command { words, background, .. } => {
+                        assert_eq!(words, vec!["echo", "a"]);
+                        assert!(!background);
+                    }
+                    _ => panic!("expected left Command"),
+                }
+                match *right {
+                    Node::Command { words, .. } => {
+                        assert_eq!(words, vec!["echo", "b"]);
+                    }
+                    _ => panic!("expected right Command"),
+                }
+            }
+            _ => panic!("expected Background compound"),
+        }
+    }
+
+    // C8 residual: reserved words after other words are plain arguments.
+    #[test]
+    fn test_reserved_word_as_argument() {
+        let ast = parse(tokenize("echo done"));
+        match ast {
+            Node::Command { words, .. } => assert_eq!(words, vec!["echo", "done"]),
+            _ => panic!("expected Command"),
+        }
+    }
 }
+
+

@@ -1,6 +1,6 @@
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicBool, AtomicI32, AtomicU32, Ordering};
-use std::sync::{LazyLock, Mutex};
+use std::sync::{LazyLock, Mutex, OnceLock};
 use crate::config::schema::SignalsConfig;
 
 pub static SIGUSR1_CUSTOM_CMD: LazyLock<Mutex<Option<String>>> = LazyLock::new(|| Mutex::new(None));
@@ -358,6 +358,53 @@ pub fn set_last_status(status: i32) {
     LAST_STATUS.store(status, Ordering::SeqCst);
 }
 
+// ── Cooperative child reaping ──────────────────────────────────────────
+//
+// Background-job watcher threads block in waitpid(pid) while the prompt
+// reaper below sweeps waitpid(-1). Without coordination the reaper can
+// steal a job's exit, leaving its watcher with ECHILD and a bogus
+// exit_code=0 report. Watchers register their pids here; the reaper
+// records raw wait statuses for watched pids so watchers can claim them.
+
+static WATCHED_PIDS: OnceLock<Mutex<HashSet<i32>>> = OnceLock::new();
+static REAPED_STATUS: OnceLock<Mutex<HashMap<i32, i32>>> = OnceLock::new();
+
+fn watched_pids() -> &'static Mutex<HashSet<i32>> {
+    WATCHED_PIDS.get_or_init(|| Mutex::new(HashSet::new()))
+}
+
+fn reaped_map() -> &'static Mutex<HashMap<i32, i32>> {
+    REAPED_STATUS.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+/// A background-job watcher takes ownership of `pid`'s exit status.
+pub fn watch_register(pid: i32) {
+    watched_pids().lock().unwrap().insert(pid);
+}
+
+/// Watcher is done with `pid`; drop any cached status for it.
+pub fn watch_unregister(pid: i32) {
+    watched_pids().lock().unwrap().remove(&pid);
+    reaped_map().lock().unwrap().remove(&pid);
+}
+
+/// Claim an exit status already harvested by the global reaper.
+pub fn claim_reaped(pid: i32) -> Option<i32> {
+    reaped_map().lock().unwrap().remove(&pid)
+}
+
+fn record_if_watched(pid: i32, status: i32) {
+    if watched_pids().lock().unwrap().contains(&pid) {
+        reaped_map().lock().unwrap().insert(pid, status);
+    }
+}
+
+/// Record a status observed by another prober (e.g. the timeout watchdog)
+/// so a registered watcher can still retrieve it.
+pub fn note_probe_result(pid: i32, raw_status: i32) {
+    record_if_watched(pid, raw_status);
+}
+
 pub fn reap_zombies(auto_report_stopped: bool, stopped_format: &crate::config::schema::MultiLineText) {
     if !NEED_REAP.swap(false, Ordering::SeqCst) {
         return;
@@ -366,6 +413,7 @@ pub fn reap_zombies(auto_report_stopped: bool, stopped_format: &crate::config::s
     loop {
         let pid = unsafe { libc::waitpid(-1, &mut status, libc::WNOHANG) };
         if pid <= 0 { break; }
+        record_if_watched(pid, status);
         if auto_report_stopped && libc::WIFSTOPPED(status) {
             let sig = libc::WSTOPSIG(status);
             let msg = stopped_format.expand(&[

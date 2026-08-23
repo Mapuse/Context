@@ -4,7 +4,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 static SHELL_START_TIME: AtomicU64 = AtomicU64::new(0);
 
 const INTERNAL_PREFIXES: &[&str] = &[
-    "_SHOPT_", "_GETOPT_", "_OPT_", "_LOADED_MODULE",
+    "_SHOPT_", "_GETOPT_", "_OPT_", "_LOADED_MODULE", "_SECONDS_RESET",
 ];
 
 fn is_internal(key: &str) -> bool {
@@ -64,6 +64,11 @@ impl Env {
         if !vars.contains_key("SHELL") {
             vars.insert("SHELL".to_string(), "context".to_string());
         }
+        // `$0` — the shell/invocation name, kept apart from the positionals.
+        vars.entry("0".to_string())
+            .or_insert_with(|| {
+                std::env::args().next().unwrap_or_else(|| "ctx".to_string())
+            });
         let start = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap_or_default()
@@ -85,9 +90,14 @@ impl Env {
     }
 
     pub fn get(&self, key: &str) -> Option<&str> {
-        if let Some(attrs) = self.attrs.get(key)
+        self.get_resolved(key, 0)
+    }
+
+    fn get_resolved(&self, key: &str, depth: u8) -> Option<&str> {
+        if depth < 32
+            && let Some(attrs) = self.attrs.get(key)
             && let Some(ref target) = attrs.nameref {
-                return self.get(target);
+                return self.get_resolved(target, depth + 1);
             }
         match key {
             "SHELL" => Some(self.vars.get("SHELL").map(|s| s.as_str()).unwrap_or("context")),
@@ -104,9 +114,14 @@ impl Env {
     }
 
     pub fn set(&mut self, key: &str, value: &str) -> bool {
-        if let Some(target) = self.attrs.get(key).and_then(|a| a.nameref.clone()) {
-            return self.set(&target, value);
-        }
+        self.set_resolved(key, value, 0)
+    }
+
+    fn set_resolved(&mut self, key: &str, value: &str, depth: u8) -> bool {
+        if depth < 32
+            && let Some(target) = self.attrs.get(key).and_then(|a| a.nameref.clone()) {
+                return self.set_resolved(&target, value, depth + 1);
+            }
         let effective_value;
         let value = if let Some(attrs) = self.attrs.get(key) {
             if attrs.lowercase {
@@ -141,7 +156,9 @@ impl Env {
         } else {
             self.vars.insert(key.to_string(), value.to_string());
         }
-        if !is_internal(key) {
+        // Only exported variables are visible to child processes; plain
+        // shell variables must stay local.
+        if !is_internal(key) && self.is_exported(key) {
             unsafe { std::env::set_var(key, value); }
         }
         true
@@ -173,7 +190,7 @@ impl Env {
     pub fn set_exported(&mut self, key: &str, value: &str, export: bool) {
         self.vars.insert(key.to_string(), value.to_string());
         self.exported.insert(key.to_string(), export);
-        if !is_internal(key) {
+        if !is_internal(key) && export {
             unsafe { std::env::set_var(key, value); }
         }
     }
@@ -202,6 +219,12 @@ impl Env {
             eprintln!("context: unset: {}: readonly variable", key);
             return;
         }
+        // Unsetting an array name removes its `{name}_N` elements and any
+        // associated associative-array data as well.
+        if self.is_array_name(key) {
+            self.unset_whole_array(key);
+            return;
+        }
         for scope in &mut self.scope_stack {
             scope.remove(key);
         }
@@ -209,6 +232,50 @@ impl Env {
         self.exported.remove(key);
         if !is_internal(key) {
             unsafe { std::env::remove_var(key); }
+        }
+    }
+
+    /// True when `name` refers to array storage: an associative array or at
+    /// least one indexed `{name}_N` element.
+    pub fn is_array_name(&self, name: &str) -> bool {
+        if self.assoc_arrays.contains_key(name) {
+            return true;
+        }
+        let prefix = format!("{}_", name);
+        let is_elem = |k: &String| {
+            k.len() > prefix.len()
+                && k.starts_with(prefix.as_str())
+                && k[prefix.len()..].bytes().all(|b| b.is_ascii_digit())
+        };
+        self.vars.keys().any(&is_elem)
+            || self.scope_stack.iter().any(|s| s.keys().any(&is_elem))
+    }
+
+    /// Remove every `{name}_N` element, the assoc-array table and the base
+    /// key itself.
+    pub fn unset_whole_array(&mut self, name: &str) {
+        let prefix = format!("{}_", name);
+        let is_elem = |k: &String| {
+            k.len() > prefix.len()
+                && k.starts_with(prefix.as_str())
+                && k[prefix.len()..].bytes().all(|b| b.is_ascii_digit())
+        };
+        let removed: Vec<String> = self.vars.keys()
+            .filter(|k| is_elem(k))
+            .cloned()
+            .collect();
+        self.vars.retain(|k, _| !is_elem(k));
+        self.vars.remove(name);
+        self.exported.remove(name);
+        for scope in &mut self.scope_stack {
+            scope.retain(|k, _| !is_elem(k));
+            scope.remove(name);
+        }
+        self.assoc_arrays.remove(name);
+        for k in removed {
+            if !is_internal(&k) {
+                unsafe { std::env::remove_var(&k); }
+            }
         }
     }
 
@@ -227,12 +294,9 @@ impl Env {
                 std::fs::read_to_string("/proc/self/stat")
                     .ok()
                     .and_then(|s| {
-                        let fields: Vec<&str> = s.split_whitespace().collect();
-                        if fields.len() > 3 {
-                            Some(fields[3].to_string())
-                        } else {
-                            None
-                        }
+                        // Skip past "pid (comm)" — comm may contain spaces/parens.
+                        let after_comm = s.rsplit_once(')').map(|(_, rest)| rest)?;
+                        after_comm.split_whitespace().nth(1).map(|s| s.to_string())
                     })
                     .unwrap_or_else(|| "0".into())
             }
@@ -273,7 +337,7 @@ impl Env {
                 let stack = crate::shell::builtin::CALL_STACK.lock().unwrap();
                 stack.last().map(|f| f.name.clone()).unwrap_or_default()
             }
-            "BASH_VERSION" => "0.70.0".to_string(),
+            "BASH_VERSION" => env!("CARGO_PKG_VERSION").to_string(),
             "HISTCMD" => self.get("HISTCMD").unwrap_or("0").to_string(),
             "BASH_SOURCE" => {
                 let stack = crate::shell::executor::SOURCE_STACK.lock().unwrap();
@@ -498,14 +562,31 @@ impl Env {
         self.vars.get(&format!("{}_{}", name, key)).map(|s| s.as_str())
     }
 
+    /// All consecutive elements of an indexed array (`{name}_0`, `{name}_1`,
+    /// ...), honoring current scoping.
+    pub fn indexed_array_elements(&self, name: &str) -> Vec<String> {
+        let mut out = Vec::new();
+        let mut key = format!("{}_", name);
+        let base_len = key.len();
+        loop {
+            key.truncate(base_len);
+            key.push_str(&out.len().to_string());
+            match self.get(&key) {
+                Some(v) => out.push(v.to_string()),
+                None => break,
+            }
+        }
+        out
+    }
+
     pub fn indexed_array_set(&mut self, name: &str, key: &str, value: &str) {
         self.set(&format!("{}_{}", name, key), value);
     }
 
     pub fn indexed_array_len(&self, name: &str) -> usize {
         let mut count = 0;
-        let mut key = String::with_capacity(name.len() + 12);
-        let base_len = name.len() + 1;
+        let mut key = format!("{}_", name);
+        let base_len = key.len();
         loop {
             key.truncate(base_len);
             key.push_str(&count.to_string());
@@ -549,7 +630,7 @@ impl Env {
             return;
         }
         self.vars.insert(key.to_string(), value.to_string());
-        if !is_internal(key) {
+        if !is_internal(key) && self.is_exported(key) {
             unsafe { std::env::set_var(key, value); }
         }
     }

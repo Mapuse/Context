@@ -55,7 +55,20 @@ pub fn history_path(cfg: &Config) -> PathBuf {
 }
 
 pub fn load() -> Config {
-    let path = config_path();
+    load_with(None, false)
+}
+
+/// Load configuration honoring CLI overrides: `--no-config` skips loading
+/// entirely; `--config-file FILE` reads an alternate file.
+pub fn load_with(config_file: Option<&str>, no_config: bool) -> Config {
+    if no_config {
+        return Config::default();
+    }
+    let path = match config_file {
+        Some(p) => PathBuf::from(p),
+        None => config_path(),
+    };
+    let auto_save = config_file.is_none();
     match fs::read_to_string(&path) {
         Ok(contents) => match toml::from_str::<Config>(&contents) {
             Ok(cfg) => cfg,
@@ -64,11 +77,12 @@ pub fn load() -> Config {
                 Config::default()
             }
         },
-        Err(_) => {
+        Err(_) if auto_save => {
             let cfg = Config::default();
             let _ = save(&cfg);
             cfg
         }
+        Err(_) => Config::default(),
     }
 }
 
@@ -76,6 +90,20 @@ pub fn save(cfg: &Config) -> std::io::Result<()> {
     let dir = config_dir();
     let _ = fs::create_dir_all(&dir);
     let path = dir.join("c.toml");
-    let toml = toml::to_string_pretty(cfg).unwrap_or_default();
+    let toml = match toml::to_string_pretty(cfg) {
+        Ok(t) if !t.trim().is_empty() => t,
+        Ok(_) => {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "refusing to write empty config",
+            ));
+        }
+        Err(e) => {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                e.to_string(),
+            ));
+        }
+    };
     fs::write(path, toml)
 }
