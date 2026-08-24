@@ -1535,13 +1535,13 @@ fn strftime_now(fmt: &str) -> String {
     };
     let t = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_secs() as libc::time_t)
+        .map(|d| d.as_secs() as _)
         .unwrap_or(0);
     let mut tm: libc::tm = unsafe { std::mem::zeroed() };
     unsafe { libc::localtime_r(&t, &mut tm); }
     let mut buf = [0u8; 256];
     let n = unsafe {
-        libc::strftime(buf.as_mut_ptr() as *mut i8, buf.len(), c_fmt.as_ptr(), &tm)
+        libc::strftime(buf.as_mut_ptr() as *mut libc::c_char, buf.len(), c_fmt.as_ptr(), &tm)
     };
     if n > 0 { String::from_utf8_lossy(&buf[..n]).into_owned() } else { String::new() }
 }
@@ -4369,7 +4369,7 @@ fn cmd_shift(args: &[String], env: &mut Env) -> BuiltinResult {
 fn cmd_ulimit(args: &[String]) -> BuiltinResult {
     let mut show_all = false;
     let mut hard = false;
-    let mut resource: Option<u32> = None;
+    let mut resource: Option<libc::c_int> = None;
     let mut value: Option<u64> = None;
     let mut i = 0;
     while i < args.len() {
@@ -4392,7 +4392,7 @@ fn cmd_ulimit(args: &[String]) -> BuiltinResult {
                 "-p" | "-u" => libc::RLIMIT_NPROC,
                 "-c" => libc::RLIMIT_CORE,
                 _ => libc::RLIMIT_NOFILE,
-            });
+            } as libc::c_int);
         } else if let Ok(v) = arg.parse::<u64>() {
             value = Some(v);
         } else if arg.starts_with('-') && arg.len() > 1 {
@@ -4406,20 +4406,20 @@ fn cmd_ulimit(args: &[String]) -> BuiltinResult {
     }
 
     if show_all {
-        let resources: &[(&str, u32)] = &[
-            ("core file size", libc::RLIMIT_CORE),
-            ("data seg size", libc::RLIMIT_DATA),
-            ("file size", libc::RLIMIT_FSIZE),
-            ("open files", libc::RLIMIT_NOFILE),
-            ("stack size", libc::RLIMIT_STACK),
-            ("cpu time", libc::RLIMIT_CPU),
-            ("max user processes", libc::RLIMIT_NPROC),
-            ("virtual memory", libc::RLIMIT_AS),
-            ("max locked memory", libc::RLIMIT_MEMLOCK),
+        let resources: &[(&str, libc::c_int)] = &[
+            ("core file size", libc::RLIMIT_CORE as libc::c_int),
+            ("data seg size", libc::RLIMIT_DATA as libc::c_int),
+            ("file size", libc::RLIMIT_FSIZE as libc::c_int),
+            ("open files", libc::RLIMIT_NOFILE as libc::c_int),
+            ("stack size", libc::RLIMIT_STACK as libc::c_int),
+            ("cpu time", libc::RLIMIT_CPU as libc::c_int),
+            ("max user processes", libc::RLIMIT_NPROC as libc::c_int),
+            ("virtual memory", libc::RLIMIT_AS as libc::c_int),
+            ("max locked memory", libc::RLIMIT_MEMLOCK as libc::c_int),
         ];
         for &(name, res) in resources {
             let mut rlim: libc::rlimit = unsafe { std::mem::zeroed() };
-            if unsafe { libc::getrlimit(res, &mut rlim) } == 0 {
+            if unsafe { libc::getrlimit(res as _, &mut rlim) } == 0 {
                 let limit = if hard { rlim.rlim_max } else { rlim.rlim_cur };
                 if limit == libc::RLIM_INFINITY {
                     println!("unlimited\t\t-{}", name);
@@ -4434,7 +4434,7 @@ fn cmd_ulimit(args: &[String]) -> BuiltinResult {
     if let Some(res) = resource {
         if let Some(v) = value {
             let mut rlim: libc::rlimit = unsafe { std::mem::zeroed() };
-            if unsafe { libc::getrlimit(res, &mut rlim) } != 0 {
+            if unsafe { libc::getrlimit(res as _, &mut rlim) } != 0 {
                 eprintln!("context: ulimit: getrlimit failed");
                 return BuiltinResult::err(2);
             }
@@ -4443,14 +4443,14 @@ fn cmd_ulimit(args: &[String]) -> BuiltinResult {
             } else {
                 rlim.rlim_cur = v;
             }
-            if unsafe { libc::setrlimit(res, &rlim) } != 0 {
+            if unsafe { libc::setrlimit(res as _, &rlim) } != 0 {
                 eprintln!("context: ulimit: cannot modify limit: Operation not permitted");
                 return BuiltinResult::err(2);
             }
             return BuiltinResult::ok();
         } else {
             let mut rlim: libc::rlimit = unsafe { std::mem::zeroed() };
-            if unsafe { libc::getrlimit(res, &mut rlim) } == 0 {
+            if unsafe { libc::getrlimit(res as _, &mut rlim) } == 0 {
                 let limit = if hard { rlim.rlim_max } else { rlim.rlim_cur };
                 if limit == libc::RLIM_INFINITY {
                     println!("unlimited");
