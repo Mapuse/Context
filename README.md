@@ -2533,7 +2533,7 @@ Signal arrives → `TRAP_SIGNAL` set → main loop checks flag → looks up hand
 A full man page is included at `ctx.1`. Install with:
 
 ```sh
-install -Dm644 ctx.1 /usr/share/man/man1/ctx.1
+install -Dm644 ctx.1 /system/share/man/man1/ctx.1
 ```
 
 Or view directly:
