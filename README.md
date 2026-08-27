@@ -200,6 +200,15 @@
 
 ## Building
 
+### Target profiles
+
+| Profile | Arch | Rust triple | Install prefix |
+|---------|------|-------------|----------------|
+| amd64 | x86_64 | `x86_64-unknown-linux-musl` | `/system` |
+| arm64 | aarch64 | `aarch64-unknown-linux-musl` | `/system` |
+
+`env.mk` auto-detects `uname -m` and sets `ARCH`, `RUST_TARGET`, `CMAKE_ARCH`, `MESON_CPU`, and `CLANG_TARGET`. All five build systems use these values — override `RUST_TARGET` or `PREFIX` to cross-compile.
+
 | Profile | Command | Flags | Use case |
 | ------- | ------- | ----- | -------- |
 | Debug | `cargo build` | — | Development iteration, fast compile |
@@ -215,6 +224,19 @@ cargo build
 
 # Release build (optimised)
 cargo build --release
+```
+
+### Cross-compilation
+
+```shell
+# Native (auto-detect)
+cargo build --release --locked
+
+# amd64 (x86_64)
+cargo build --release --locked --target x86_64-unknown-linux-musl
+
+# arm64 (aarch64)
+cargo build --release --locked --target aarch64-unknown-linux-musl
 ```
 
 ### Feature flags
@@ -240,52 +262,114 @@ cargo check --features python
 
 All build systems auto-detect `x86_64`/`aarch64` and select the correct musl target. Cross-compilation files are in `env.mk`, `toolchain.cmake`, and `cross.txt` (generated via `scripts/crossgen.sh`).
 
+Context installs the binary to `/bin/ctx` (not `/system/bin/`).
+
 ### Cargo (direct)
 
 ```shell
-cargo build --release
-# Binary: target/release/ctx
-# Install:
+# Native
+cargo build --release --locked
 install -Dm755 target/release/ctx /bin/ctx
+
+# amd64
+cargo build --release --locked --target x86_64-unknown-linux-musl
+install -Dm755 target/x86_64-unknown-linux-musl/release/ctx /bin/ctx
+
+# arm64
+cargo build --release --locked --target aarch64-unknown-linux-musl
+install -Dm755 target/aarch64-unknown-linux-musl/release/ctx /bin/ctx
 ```
 
 ### Make
 
 ```shell
-make build                    # auto-detects arch, builds for host
-make install                  # installs to /bin/ctx
-make install DESTDIR=/mnt     # staged install
+# Native (auto-detects arch)
+make build
+make install
+
+# amd64
+make build RUST_TARGET=x86_64-unknown-linux-musl
+make install RUST_TARGET=x86_64-unknown-linux-musl
+
+# arm64
+make build RUST_TARGET=aarch64-unknown-linux-musl
+make install RUST_TARGET=aarch64-unknown-linux-musl
+
+# Staged install
+make install DESTDIR=/mnt
 ```
 
 ### Meson
 
 ```shell
-./scripts/crossgen.sh                              # generate cross file for host arch
-meson setup builddir --cross-file cross.txt
+# Native (auto-detects arch)
+./scripts/crossgen.sh
+meson setup builddir --cross-file cross.txt --prefix=/system
 meson compile -C builddir
-meson install -C builddir                   # ctx -> /bin/ctx
+meson install -C builddir
+
+# amd64
+./scripts/crossgen.sh
+# Edit cross.txt: set cpu_family = 'x86_64', c_args target to x86_64-unknown-linux-musl
+meson setup builddir --cross-file cross.txt --prefix=/system
+meson compile -C builddir
+meson install -C builddir
+
+# arm64
+./scripts/crossgen.sh
+# Edit cross.txt: set cpu_family = 'aarch64', c_args target to aarch64-unknown-linux-musl
+meson setup builddir --cross-file cross.txt --prefix=/system
+meson compile -C builddir
+meson install -C builddir
 ```
 
 ### Ninja
 
 ```shell
-ninja -f build.ninja                       # build
-DESTDIR=/mnt ninja -f build.ninja install  # staged install
+# Native (auto-detects arch via uname -m)
+ninja -f build.ninja
+
+# Staged install
+DESTDIR=/mnt ninja -f build.ninja install
 ```
+
+Cross-compilation: edit `build.ninja` to replace the auto-detect case with the desired triple directly, e.g. `T=aarch64-unknown-linux-musl`.
 
 ### CMake
 
 ```shell
-cmake -B build -DCMAKE_TOOLCHAIN_FILE=toolchain.cmake -DCMAKE_INSTALL_PREFIX=/
+# Native (auto-detects arch via toolchain.cmake)
+cmake -B build -DCMAKE_TOOLCHAIN_FILE=toolchain.cmake -DCMAKE_INSTALL_PREFIX=/system
 cmake --build build
-cmake --install build                      # ctx -> /bin/ctx
+cmake --install build
+
+# amd64
+cmake -B build -DCMAKE_TOOLCHAIN_FILE=toolchain.cmake -DCMAKE_INSTALL_PREFIX=/system
+cmake --build build
+cmake --install build
+
+# arm64
+cmake -B build -DCMAKE_TOOLCHAIN_FILE=toolchain.cmake -DCMAKE_INSTALL_PREFIX=/system
+cmake --build build
+cmake --install build
 ```
+
+`toolchain.cmake` auto-detects `uname -m` and sets `CMAKE_SYSTEM_PROCESSOR` and the clang target triple.
 
 ### MCX (package manager)
 
 ```shell
 mcx -i context
 ```
+
+### Environment variables
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `RUST_TARGET` | auto-detected from `uname -m` | Rust target triple (`x86_64-unknown-linux-musl` or `aarch64-unknown-linux-musl`) |
+| `PROFILE` | `release` | Cargo build profile (`debug`, `release`, etc.) |
+| `PREFIX` | `/system` | Installation prefix for headers, libs, and man pages |
+| `DESTDIR` | (empty) | Staging root for `make install`, `ninja install`, etc. |
 
 **Dependencies:**
 
