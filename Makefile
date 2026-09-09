@@ -1,5 +1,6 @@
 include env.mk
 
+ROOT    := $(dir $(abspath $(lastword $(MAKEFILE_LIST))))
 PROFILE ?= release
 TARGET  := target/$(RUST_TARGET)/$(PROFILE)/ctx
 DESTDIR  ?=
@@ -20,7 +21,7 @@ all: build
 deps: $(CPS_DIR)
 
 build: $(CPS_DIR)
-	CARGO_TARGET_DIR=$(CURDIR)/target cargo build --target $(RUST_TARGET) --profile $(PROFILE) --locked
+	cd $(ROOT) && CARGO_TARGET_DIR=$(ROOT)target cargo build --target $(RUST_TARGET) --profile $(PROFILE) --locked
 
 install: build install-man
 	install -Dm755 $(TARGET) $(DESTDIR)/bin/ctx
