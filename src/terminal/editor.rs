@@ -1,12 +1,10 @@
+use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyModifiers};
 use std::io::{self, Write};
 use std::process::Command;
 use std::sync::{LazyLock, Mutex};
-use crossterm::{
-    event::{self, Event, KeyCode, KeyEvent, KeyModifiers},
-};
 
-use super::prompt::PromptDisplay;
 use super::color::hex_to_ansi;
+use super::prompt::PromptDisplay;
 use crate::shell::builtin::HISTORY_CB;
 
 fn ps2_display() -> (String, bool) {
@@ -53,7 +51,15 @@ fn find_word_start(input: &str, cursor: usize) -> usize {
     let mut i = cursor;
     while i > 0 {
         let ch = chars[i - 1];
-        if ch == ' ' || ch == '\t' || ch == '\n' || ch == '|' || ch == '&' || ch == ';' || ch == '(' || ch == '{' {
+        if ch == ' '
+            || ch == '\t'
+            || ch == '\n'
+            || ch == '|'
+            || ch == '&'
+            || ch == ';'
+            || ch == '('
+            || ch == '{'
+        {
             return i;
         }
         i -= 1;
@@ -81,7 +87,8 @@ fn tab_common_prefix(completions: &[String]) -> String {
 static KILL_RING: LazyLock<Mutex<Vec<String>>> = LazyLock::new(|| Mutex::new(Vec::new()));
 static UNDO_STACK: LazyLock<Mutex<Vec<(String, usize)>>> = LazyLock::new(|| Mutex::new(Vec::new()));
 static REDO_STACK: LazyLock<Mutex<Vec<(String, usize)>>> = LazyLock::new(|| Mutex::new(Vec::new()));
-static LAST_UNDO_PUSH: LazyLock<Mutex<Option<std::time::Instant>>> = LazyLock::new(|| Mutex::new(None));
+static LAST_UNDO_PUSH: LazyLock<Mutex<Option<std::time::Instant>>> =
+    LazyLock::new(|| Mutex::new(None));
 
 use std::borrow::Cow;
 
@@ -112,16 +119,30 @@ fn push_undo(input: &str, cursor: usize) {
 
 fn undo(input: &str, cursor: usize) -> Option<(String, usize)> {
     *LAST_UNDO_PUSH.lock().expect("LAST_UNDO_PUSH lock") = None;
-    UNDO_STACK.lock().expect("UNDO_STACK lock").pop().inspect(|_prev| {
-        REDO_STACK.lock().expect("REDO_STACK lock").push((input.to_string(), cursor));
-    })
+    UNDO_STACK
+        .lock()
+        .expect("UNDO_STACK lock")
+        .pop()
+        .inspect(|_prev| {
+            REDO_STACK
+                .lock()
+                .expect("REDO_STACK lock")
+                .push((input.to_string(), cursor));
+        })
 }
 
 fn redo(input: &str, cursor: usize) -> Option<(String, usize)> {
     *LAST_UNDO_PUSH.lock().expect("LAST_UNDO_PUSH lock") = None;
-    REDO_STACK.lock().expect("REDO_STACK lock").pop().inspect(|_prev| {
-        UNDO_STACK.lock().expect("UNDO_STACK lock").push((input.to_string(), cursor));
-    })
+    REDO_STACK
+        .lock()
+        .expect("REDO_STACK lock")
+        .pop()
+        .inspect(|_prev| {
+            UNDO_STACK
+                .lock()
+                .expect("UNDO_STACK lock")
+                .push((input.to_string(), cursor));
+        })
 }
 
 fn kill_ring_push(text: &str) {
@@ -139,9 +160,15 @@ fn kill_ring_yank() -> Option<String> {
 
 fn format_key(code: KeyCode, modifiers: KeyModifiers) -> String {
     let mut parts: Vec<String> = Vec::new();
-    if modifiers.contains(KeyModifiers::CONTROL) { parts.push("Ctrl".to_string()); }
-    if modifiers.contains(KeyModifiers::ALT) { parts.push("Alt".to_string()); }
-    if modifiers.contains(KeyModifiers::SHIFT) { parts.push("Shift".to_string()); }
+    if modifiers.contains(KeyModifiers::CONTROL) {
+        parts.push("Ctrl".to_string());
+    }
+    if modifiers.contains(KeyModifiers::ALT) {
+        parts.push("Alt".to_string());
+    }
+    if modifiers.contains(KeyModifiers::SHIFT) {
+        parts.push("Shift".to_string());
+    }
     match code {
         KeyCode::Char(c) => parts.push(c.to_string()),
         KeyCode::Enter => parts.push("Enter".to_string()),
@@ -164,8 +191,13 @@ fn format_key(code: KeyCode, modifiers: KeyModifiers) -> String {
 
 fn terminal_bell(bell: &str) {
     match bell {
-        "audible" => { print!("\x07"); }
-        "visible" => { print!("\x1b[?5h"); print!("\x1b[?5l"); }
+        "audible" => {
+            print!("\x07");
+        }
+        "visible" => {
+            print!("\x1b[?5h");
+            print!("\x1b[?5l");
+        }
         _ => {}
     }
 }
@@ -204,11 +236,15 @@ fn parse_key_spec(spec: &str) -> (KeyModifiers, KeyCode) {
 }
 
 fn matches_key_event(code: KeyCode, modifiers: KeyModifiers, spec: &str) -> bool {
-    if spec.is_empty() { return false; }
+    if spec.is_empty() {
+        return false;
+    }
     let (exp_mods, exp_code) = parse_key_spec(spec);
-    let ctrl_ok = !exp_mods.contains(KeyModifiers::CONTROL) || modifiers.contains(KeyModifiers::CONTROL);
+    let ctrl_ok =
+        !exp_mods.contains(KeyModifiers::CONTROL) || modifiers.contains(KeyModifiers::CONTROL);
     let alt_ok = !exp_mods.contains(KeyModifiers::ALT) || modifiers.contains(KeyModifiers::ALT);
-    let shift_ok = !exp_mods.contains(KeyModifiers::SHIFT) || modifiers.contains(KeyModifiers::SHIFT);
+    let shift_ok =
+        !exp_mods.contains(KeyModifiers::SHIFT) || modifiers.contains(KeyModifiers::SHIFT);
     code == exp_code && ctrl_ok && alt_ok && shift_ok
 }
 
@@ -222,18 +258,24 @@ fn vi_cursor_escape(name: &str) -> &str {
 }
 
 fn clipboard_copy(text: &str, cfg: &crate::config::schema::ClipboardConfig) {
-    if !cfg.enabled || text.is_empty() { return; }
+    if !cfg.enabled || text.is_empty() {
+        return;
+    }
     let tool = match cfg.method.as_str() {
         "xclip" => Some("xclip"),
         "xsel" => Some("xsel"),
         "pbcopy" => Some("pbcopy"),
         "wl-copy" => Some("wl-copy"),
-        _ => {
-            ["pbcopy", "xclip", "xsel", "wl-copy"].iter().find(|t| {
+        _ => ["pbcopy", "xclip", "xsel", "wl-copy"]
+            .iter()
+            .find(|t| {
                 Command::new(t).arg("--version").output().is_ok()
-                    || Command::new(t).stdin(std::process::Stdio::null()).spawn().is_ok()
-            }).copied()
-        }
+                    || Command::new(t)
+                        .stdin(std::process::Stdio::null())
+                        .spawn()
+                        .is_ok()
+            })
+            .copied(),
     };
     if let Some(tool) = tool {
         let mut cmd = match tool {
@@ -258,7 +300,11 @@ fn clipboard_copy(text: &str, cfg: &crate::config::schema::ClipboardConfig) {
     }
 }
 
-fn highlight_line(input: &str, colorize: bool, colors: &crate::config::schema::ColorsConfig) -> String {
+fn highlight_line(
+    input: &str,
+    colorize: bool,
+    colors: &crate::config::schema::ColorsConfig,
+) -> String {
     if !colorize {
         if colors.input_color.is_empty() {
             return input.to_string();
@@ -293,61 +339,107 @@ fn highlight_line(input: &str, colorize: bool, colors: &crate::config::schema::C
 
     while i < len {
         match chars[i] {
-            '#' if i == 0 || (i > 0 && matches!(chars[i-1], ' ' | '|' | '&' | ';' | '(' | '\n')) => {
+            '#' if i == 0
+                || (i > 0 && matches!(chars[i - 1], ' ' | '|' | '&' | ';' | '(' | '\n')) =>
+            {
                 out.push_str(&comment_color);
-                while i < len { out.push(chars[i]); i += 1; }
+                while i < len {
+                    out.push(chars[i]);
+                    i += 1;
+                }
                 out.push_str(&effective_reset);
             }
             '"' => {
                 out.push_str(&string_color);
-                out.push(chars[i]); i += 1;
+                out.push(chars[i]);
+                i += 1;
                 while i < len && chars[i] != '"' {
-                    if chars[i] == '\\' && i + 1 < len { out.push(chars[i]); i += 1; }
-                    out.push(chars[i]); i += 1;
+                    if chars[i] == '\\' && i + 1 < len {
+                        out.push(chars[i]);
+                        i += 1;
+                    }
+                    out.push(chars[i]);
+                    i += 1;
                 }
-                if i < len { out.push(chars[i]); i += 1; }
+                if i < len {
+                    out.push(chars[i]);
+                    i += 1;
+                }
                 out.push_str(&effective_reset);
             }
             '\'' => {
                 out.push_str(&string_color);
-                out.push(chars[i]); i += 1;
-                while i < len && chars[i] != '\'' { out.push(chars[i]); i += 1; }
-                if i < len { out.push(chars[i]); i += 1; }
+                out.push(chars[i]);
+                i += 1;
+                while i < len && chars[i] != '\'' {
+                    out.push(chars[i]);
+                    i += 1;
+                }
+                if i < len {
+                    out.push(chars[i]);
+                    i += 1;
+                }
                 out.push_str(&effective_reset);
             }
             '`' => {
                 out.push_str(&string_color);
-                out.push(chars[i]); i += 1;
-                while i < len && chars[i] != '`' { out.push(chars[i]); i += 1; }
-                if i < len { out.push(chars[i]); i += 1; }
+                out.push(chars[i]);
+                i += 1;
+                while i < len && chars[i] != '`' {
+                    out.push(chars[i]);
+                    i += 1;
+                }
+                if i < len {
+                    out.push(chars[i]);
+                    i += 1;
+                }
                 out.push_str(&effective_reset);
             }
             '$' => {
                 out.push_str(&variable_color);
-                out.push(chars[i]); i += 1;
+                out.push(chars[i]);
+                i += 1;
                 if i < len {
                     match chars[i] {
                         '{' => {
-                            out.push(chars[i]); i += 1;
-                            while i < len && chars[i] != '}' { out.push(chars[i]); i += 1; }
-                            if i < len { out.push(chars[i]); i += 1; }
+                            out.push(chars[i]);
+                            i += 1;
+                            while i < len && chars[i] != '}' {
+                                out.push(chars[i]);
+                                i += 1;
+                            }
+                            if i < len {
+                                out.push(chars[i]);
+                                i += 1;
+                            }
                         }
                         '(' => {
-                            out.push(chars[i]); i += 1;
+                            out.push(chars[i]);
+                            i += 1;
                             let mut depth = 1u32;
                             while i < len && depth > 0 {
                                 match chars[i] {
                                     '(' => depth += 1,
-                                    ')' => { depth -= 1; if depth == 0 { break; } }
+                                    ')' => {
+                                        depth -= 1;
+                                        if depth == 0 {
+                                            break;
+                                        }
+                                    }
                                     _ => {}
                                 }
-                                out.push(chars[i]); i += 1;
+                                out.push(chars[i]);
+                                i += 1;
                             }
-                            if i < len { out.push(chars[i]); i += 1; }
+                            if i < len {
+                                out.push(chars[i]);
+                                i += 1;
+                            }
                         }
                         _ => {
                             while i < len && (chars[i].is_alphanumeric() || chars[i] == '_') {
-                                out.push(chars[i]); i += 1;
+                                out.push(chars[i]);
+                                i += 1;
                             }
                         }
                     }
@@ -356,71 +448,109 @@ fn highlight_line(input: &str, colorize: bool, colors: &crate::config::schema::C
             }
             '|' if i + 1 < len && chars[i + 1] == '&' => {
                 out.push_str(&operator_color);
-                out.push(chars[i]); out.push(chars[i+1]); i += 2;
+                out.push(chars[i]);
+                out.push(chars[i + 1]);
+                i += 2;
                 out.push_str(&effective_reset);
             }
             '|' | '&' if i + 1 < len && chars[i + 1] == chars[i] => {
                 out.push_str(&operator_color);
-                out.push(chars[i]); out.push(chars[i+1]); i += 2;
+                out.push(chars[i]);
+                out.push(chars[i + 1]);
+                i += 2;
                 out.push_str(&effective_reset);
             }
             '|' | '&' | ';' | '>' | '<' => {
                 out.push_str(&operator_color);
-                out.push(chars[i]); i += 1;
+                out.push(chars[i]);
+                i += 1;
                 if i < len && (chars[i] == '>' || chars[i] == '&' || chars[i] == '<') {
-                    out.push(chars[i]); i += 1;
+                    out.push(chars[i]);
+                    i += 1;
                 }
                 out.push_str(&effective_reset);
             }
             '=' | '+' | '-' if i + 1 < len && chars[i + 1] == '=' => {
                 out.push_str(&operator_color);
-                out.push(chars[i]); i += 1;
-                out.push(chars[i]); i += 1;
+                out.push(chars[i]);
+                i += 1;
+                out.push(chars[i]);
+                i += 1;
                 out.push_str(&effective_reset);
             }
             '=' => {
                 out.push_str(&operator_color);
-                out.push(chars[i]); i += 1;
+                out.push(chars[i]);
+                i += 1;
                 if i < len && chars[i] == '=' {
-                    out.push(chars[i]); i += 1;
+                    out.push(chars[i]);
+                    i += 1;
                 }
                 out.push_str(&effective_reset);
             }
             '!' if i + 1 < len && chars[i + 1] == '=' => {
                 out.push_str(&operator_color);
-                out.push(chars[i]); out.push(chars[i+1]); i += 2;
+                out.push(chars[i]);
+                out.push(chars[i + 1]);
+                i += 2;
                 out.push_str(&effective_reset);
             }
             '\\' if i + 1 < len => {
                 out.push_str(&operator_color);
-                out.push(chars[i]); i += 1;
-                out.push(chars[i]); i += 1;
+                out.push(chars[i]);
+                i += 1;
+                out.push(chars[i]);
+                i += 1;
                 out.push_str(&effective_reset);
             }
             ' ' | '\t' => {
-                out.push(chars[i]); i += 1;
+                out.push(chars[i]);
+                i += 1;
             }
             _ => {
                 let start = i;
                 while i < len {
                     match chars[i] {
-                        ' ' | '\t' | '"' | '\'' | '$' | '|' | '&' | ';' | '>' | '<' | '#' | '=' | '!' | '+' | '-' | '\\' | '(' | ')' | '{' | '}' | '`' => break,
+                        ' ' | '\t' | '"' | '\'' | '$' | '|' | '&' | ';' | '>' | '<' | '#' | '='
+                        | '!' | '+' | '-' | '\\' | '(' | ')' | '{' | '}' | '`' => break,
                         _ => {}
                     }
                     i += 1;
                 }
                 if i == start {
-                    out.push(chars[i]); i += 1;
+                    out.push(chars[i]);
+                    i += 1;
                 } else if i > start {
                     let word: String = chars[start..i].iter().collect();
                     let mut prev = start;
-                    while prev > 0 && chars[prev - 1] == ' ' { prev -= 1; }
-                    let is_cmd_pos = prev == 0 || (prev > 0 && (chars[prev-1] == '|' || chars[prev-1] == '&' || chars[prev-1] == ';' || chars[prev-1] == '(' || chars[prev-1] == '\n' || chars[prev-1] == '!'));
+                    while prev > 0 && chars[prev - 1] == ' ' {
+                        prev -= 1;
+                    }
+                    let is_cmd_pos = prev == 0
+                        || (prev > 0
+                            && (chars[prev - 1] == '|'
+                                || chars[prev - 1] == '&'
+                                || chars[prev - 1] == ';'
+                                || chars[prev - 1] == '('
+                                || chars[prev - 1] == '\n'
+                                || chars[prev - 1] == '!'));
                     if word.starts_with('-') && word.len() > 1 && word != "--" {
                         out.push_str(&flag_color);
                         out.push_str(&word);
                         out.push_str(&effective_reset);
-                    } else if !is_cmd_pos && word.chars().next().is_some_and(|c| c.is_ascii_digit()) && word.chars().all(|c| c.is_ascii_hexdigit() || c == '.' || c == 'x' || c == 'X' || c == 'o' || c == 'O' || c == 'b' || c == 'B') {
+                    } else if !is_cmd_pos
+                        && word.chars().next().is_some_and(|c| c.is_ascii_digit())
+                        && word.chars().all(|c| {
+                            c.is_ascii_hexdigit()
+                                || c == '.'
+                                || c == 'x'
+                                || c == 'X'
+                                || c == 'o'
+                                || c == 'O'
+                                || c == 'b'
+                                || c == 'B'
+                        })
+                    {
                         out.push_str(&number_color);
                         out.push_str(&word);
                         out.push_str(&effective_reset);
@@ -444,7 +574,10 @@ fn highlight_line(input: &str, colorize: bool, colors: &crate::config::schema::C
     let out_chars: Vec<char> = out.chars().collect();
     let mut j = 0;
     while j < out_chars.len() {
-        if out_chars[j] == '\\' && j + 1 < out_chars.len() && (out_chars[j + 1] == '[' || out_chars[j + 1] == ']') {
+        if out_chars[j] == '\\'
+            && j + 1 < out_chars.len()
+            && (out_chars[j + 1] == '[' || out_chars[j + 1] == ']')
+        {
             j += 2;
         } else {
             filtered.push(out_chars[j]);
@@ -455,15 +588,28 @@ fn highlight_line(input: &str, colorize: bool, colors: &crate::config::schema::C
 }
 
 #[allow(clippy::too_many_arguments)]
-fn exec_widget(widget: &str, input: &mut String, cursor_pos: &mut usize, history: &[String], history_offset: &mut Option<usize>, temp_buf: &mut String, word_delimiters: &str, clipboard_cfg: &crate::config::schema::ClipboardConfig) {
+fn exec_widget(
+    widget: &str,
+    input: &mut String,
+    cursor_pos: &mut usize,
+    history: &[String],
+    history_offset: &mut Option<usize>,
+    temp_buf: &mut String,
+    word_delimiters: &str,
+    clipboard_cfg: &crate::config::schema::ClipboardConfig,
+) {
     let delims: Vec<char> = word_delimiters.chars().collect();
     let is_delim = |c: char| delims.contains(&c);
     match widget {
         "backward-char" => {
-            if *cursor_pos > 0 { *cursor_pos -= 1; }
+            if *cursor_pos > 0 {
+                *cursor_pos -= 1;
+            }
         }
         "forward-char" => {
-            if *cursor_pos < input.chars().count() { *cursor_pos += 1; }
+            if *cursor_pos < input.chars().count() {
+                *cursor_pos += 1;
+            }
         }
         "backward-delete-char" => {
             if *cursor_pos > 0 {
@@ -479,19 +625,31 @@ fn exec_widget(widget: &str, input: &mut String, cursor_pos: &mut usize, history
         "backward-word" => {
             let chars: Vec<char> = input.chars().collect();
             let mut pos = *cursor_pos;
-            while pos > 0 && is_delim(chars[pos - 1]) { pos -= 1; }
-            while pos > 0 && !is_delim(chars[pos - 1]) { pos -= 1; }
+            while pos > 0 && is_delim(chars[pos - 1]) {
+                pos -= 1;
+            }
+            while pos > 0 && !is_delim(chars[pos - 1]) {
+                pos -= 1;
+            }
             *cursor_pos = pos;
         }
         "forward-word" => {
             let chars: Vec<char> = input.chars().collect();
             let mut pos = *cursor_pos;
-            while pos < chars.len() && is_delim(chars[pos]) { pos += 1; }
-            while pos < chars.len() && !is_delim(chars[pos]) { pos += 1; }
+            while pos < chars.len() && is_delim(chars[pos]) {
+                pos += 1;
+            }
+            while pos < chars.len() && !is_delim(chars[pos]) {
+                pos += 1;
+            }
             *cursor_pos = pos;
         }
-        "beginning-of-line" => { *cursor_pos = 0; }
-        "end-of-line" => { *cursor_pos = input.chars().count(); }
+        "beginning-of-line" => {
+            *cursor_pos = 0;
+        }
+        "end-of-line" => {
+            *cursor_pos = input.chars().count();
+        }
         "kill-line" => {
             let killed: String = input.chars().skip(*cursor_pos).collect();
             kill_ring_push(&killed);
@@ -508,9 +666,17 @@ fn exec_widget(widget: &str, input: &mut String, cursor_pos: &mut usize, history
         "kill-word" => {
             let chars: Vec<char> = input.chars().collect();
             let mut end = *cursor_pos;
-            while end < chars.len() && is_delim(chars[end]) { end += 1; }
-            while end < chars.len() && !is_delim(chars[end]) { end += 1; }
-            let killed: String = input.chars().skip(*cursor_pos).take(end - *cursor_pos).collect();
+            while end < chars.len() && is_delim(chars[end]) {
+                end += 1;
+            }
+            while end < chars.len() && !is_delim(chars[end]) {
+                end += 1;
+            }
+            let killed: String = input
+                .chars()
+                .skip(*cursor_pos)
+                .take(end - *cursor_pos)
+                .collect();
             kill_ring_push(&killed);
             let byte_start = char_to_byte(input, *cursor_pos);
             let byte_end = char_to_byte(input, end);
@@ -519,9 +685,17 @@ fn exec_widget(widget: &str, input: &mut String, cursor_pos: &mut usize, history
         "backward-kill-word" => {
             let chars: Vec<char> = input.chars().collect();
             let mut start = *cursor_pos;
-            while start > 0 && is_delim(chars[start - 1]) { start -= 1; }
-            while start > 0 && !is_delim(chars[start - 1]) { start -= 1; }
-            let killed: String = input.chars().skip(start).take(*cursor_pos - start).collect();
+            while start > 0 && is_delim(chars[start - 1]) {
+                start -= 1;
+            }
+            while start > 0 && !is_delim(chars[start - 1]) {
+                start -= 1;
+            }
+            let killed: String = input
+                .chars()
+                .skip(start)
+                .take(*cursor_pos - start)
+                .collect();
             kill_ring_push(&killed);
             let byte_start = char_to_byte(input, start);
             let byte_end = char_to_byte(input, *cursor_pos);
@@ -544,7 +718,10 @@ fn exec_widget(widget: &str, input: &mut String, cursor_pos: &mut usize, history
                 *temp_buf = input.clone();
                 *history_offset = Some(0);
             } else if let Some(ref mut idx) = *history_offset
-                && *idx < history.len().saturating_sub(1) { *idx += 1; }
+                && *idx < history.len().saturating_sub(1)
+            {
+                *idx += 1;
+            }
             if let Some(idx) = *history_offset {
                 let hi = history.len().saturating_sub(1 + idx);
                 if hi < history.len() {
@@ -557,7 +734,9 @@ fn exec_widget(widget: &str, input: &mut String, cursor_pos: &mut usize, history
             if let Some(idx) = *history_offset {
                 if idx > 0 {
                     *history_offset = Some(idx - 1);
-                    let hi = history.len().saturating_sub(1 + history_offset.expect("history_offset Some"));
+                    let hi = history
+                        .len()
+                        .saturating_sub(1 + history_offset.expect("history_offset Some"));
                     *input = history[hi].clone();
                     *cursor_pos = input.chars().count();
                 } else {
@@ -581,7 +760,11 @@ fn exec_widget(widget: &str, input: &mut String, cursor_pos: &mut usize, history
         }
         "transpose-chars" => {
             if *cursor_pos > 0 && input.chars().count() > 1 {
-                let pos = if *cursor_pos >= input.chars().count() { *cursor_pos - 1 } else { *cursor_pos };
+                let pos = if *cursor_pos >= input.chars().count() {
+                    *cursor_pos - 1
+                } else {
+                    *cursor_pos
+                };
                 if pos > 0 {
                     let chars: Vec<char> = input.chars().collect();
                     let a = chars[pos - 1];
@@ -599,22 +782,35 @@ fn exec_widget(widget: &str, input: &mut String, cursor_pos: &mut usize, history
         "transpose-words" => {
             let chars: Vec<char> = input.chars().collect();
             let len = chars.len();
-            if len < 2 { return; }
+            if len < 2 {
+                return;
+            }
             let mut w1_start = *cursor_pos;
-            while w1_start < len && is_delim(chars[w1_start]) { w1_start += 1; }
+            while w1_start < len && is_delim(chars[w1_start]) {
+                w1_start += 1;
+            }
             let mut w1_end = w1_start;
-            while w1_end < len && !is_delim(chars[w1_end]) { w1_end += 1; }
+            while w1_end < len && !is_delim(chars[w1_end]) {
+                w1_end += 1;
+            }
             let mut w2_end = *cursor_pos;
-            while w2_end > 0 && is_delim(chars[w2_end - 1]) { w2_end -= 1; }
+            while w2_end > 0 && is_delim(chars[w2_end - 1]) {
+                w2_end -= 1;
+            }
             let mut w2_start = w2_end;
-            while w2_start > 0 && !is_delim(chars[w2_start - 1]) { w2_start -= 1; }
+            while w2_start > 0 && !is_delim(chars[w2_start - 1]) {
+                w2_start -= 1;
+            }
             if w2_start < w2_end && w1_start < w1_end && w2_end <= w1_start {
                 let word_before: String = chars[w2_start..w2_end].iter().collect();
                 let word_after: String = chars[w1_start..w1_end].iter().collect();
                 let before: String = chars[..w2_start].iter().collect();
                 let between: String = chars[w2_end..w1_start].iter().collect();
                 let after: String = chars[w1_end..].iter().collect();
-                *input = format!("{}{}{}{}{}", before, word_after, between, word_before, after);
+                *input = format!(
+                    "{}{}{}{}{}",
+                    before, word_after, between, word_before, after
+                );
                 *cursor_pos = w2_start + word_after.chars().count();
             }
         }
@@ -622,9 +818,13 @@ fn exec_widget(widget: &str, input: &mut String, cursor_pos: &mut usize, history
             let chars: Vec<char> = input.chars().collect();
             let len = chars.len();
             let mut start = *cursor_pos;
-            while start < len && is_delim(chars[start]) { start += 1; }
+            while start < len && is_delim(chars[start]) {
+                start += 1;
+            }
             let mut end = start;
-            while end < len && !is_delim(chars[end]) { end += 1; }
+            while end < len && !is_delim(chars[end]) {
+                end += 1;
+            }
             if start < end {
                 let word: String = chars[start..end].iter().collect();
                 let mut result = String::with_capacity(word.len());
@@ -647,9 +847,13 @@ fn exec_widget(widget: &str, input: &mut String, cursor_pos: &mut usize, history
             let chars: Vec<char> = input.chars().collect();
             let len = chars.len();
             let mut start = *cursor_pos;
-            while start < len && is_delim(chars[start]) { start += 1; }
+            while start < len && is_delim(chars[start]) {
+                start += 1;
+            }
             let mut end = start;
-            while end < len && !is_delim(chars[end]) { end += 1; }
+            while end < len && !is_delim(chars[end]) {
+                end += 1;
+            }
             if start < end {
                 let word: String = chars[start..end].iter().collect();
                 let upper: String = word.chars().flat_map(|c| c.to_uppercase()).collect();
@@ -663,9 +867,13 @@ fn exec_widget(widget: &str, input: &mut String, cursor_pos: &mut usize, history
             let chars: Vec<char> = input.chars().collect();
             let len = chars.len();
             let mut start = *cursor_pos;
-            while start < len && is_delim(chars[start]) { start += 1; }
+            while start < len && is_delim(chars[start]) {
+                start += 1;
+            }
             let mut end = start;
-            while end < len && !is_delim(chars[end]) { end += 1; }
+            while end < len && !is_delim(chars[end]) {
+                end += 1;
+            }
             if start < end {
                 let word: String = chars[start..end].iter().collect();
                 let lower: String = word.chars().flat_map(|c| c.to_lowercase()).collect();
@@ -725,22 +933,36 @@ pub fn is_input_incomplete(input: &str) -> bool {
             }
         } else if in_double {
             match ch {
-                '\\' if i + 1 < len => { i += 1; }
-                '"' => { in_double = false; }
+                '\\' if i + 1 < len => {
+                    i += 1;
+                }
+                '"' => {
+                    in_double = false;
+                }
                 _ => {}
             }
         } else {
             match ch {
-                '\'' => { in_single = true; }
-                '"' => { in_double = true; }
+                '\'' => {
+                    in_single = true;
+                }
+                '"' => {
+                    in_double = true;
+                }
                 '$' if i + 1 < len && chars[i + 1] == '(' => {
                     cmd_sub_depth += 1;
                     i += 1;
                 }
-                ')' if cmd_sub_depth > 0 => { cmd_sub_depth -= 1; }
-                '\\' if i + 1 < len => { i += 1; }
+                ')' if cmd_sub_depth > 0 => {
+                    cmd_sub_depth -= 1;
+                }
+                '\\' if i + 1 < len => {
+                    i += 1;
+                }
                 '#' => {
-                    while i < len && chars[i] != '\n' { i += 1; }
+                    while i < len && chars[i] != '\n' {
+                        i += 1;
+                    }
                     continue;
                 }
                 _ => {}
@@ -786,21 +1008,35 @@ fn shell_words(line: &str) -> Vec<String> {
     let mut in_double = false;
     for c in line.chars() {
         if in_single {
-            if c == '\'' { in_single = false; } else { quoted = true; }
+            if c == '\'' {
+                in_single = false;
+            } else {
+                quoted = true;
+            }
             continue;
         }
         if in_double {
             match c {
                 '"' => in_double = false,
-                '\\' => { quoted = true; }
+                '\\' => {
+                    quoted = true;
+                }
                 _ => quoted = true,
             }
             continue;
         }
         match c {
-            '\'' => { in_single = true; quoted = true; }
-            '"' => { in_double = true; quoted = true; }
-            '\\' => { quoted = true; }
+            '\'' => {
+                in_single = true;
+                quoted = true;
+            }
+            '"' => {
+                in_double = true;
+                quoted = true;
+            }
+            '\\' => {
+                quoted = true;
+            }
             '#' if cur.is_empty() && !quoted => break,
             c if c.is_whitespace() => {
                 if !cur.is_empty() {
@@ -849,46 +1085,60 @@ fn heredoc_unterminated(input: &str) -> bool {
         while i < n {
             let c = bytes[i];
             if in_single {
-                if c == '\'' { in_single = false; }
+                if c == '\'' {
+                    in_single = false;
+                }
                 i += 1;
                 continue;
             }
             if in_double {
-                if c == '"' { in_double = false; }
-                if c == '\\' { i += 1; }
+                if c == '"' {
+                    in_double = false;
+                }
+                if c == '\\' {
+                    i += 1;
+                }
                 i += 1;
                 continue;
             }
             match c {
                 '\'' => in_single = true,
                 '"' => in_double = true,
-                '\\' => { i += 1; }
-                '<' if i + 1 < n && bytes[i + 1] == '<'
-                    && !(i + 2 < n && bytes[i + 2] == '<') => {
-                        // Found a heredoc operator; read the delimiter word.
-                        let mut j = i + 2;
-                        let strip_tabs = j < n && bytes[j] == '-';
-                        if strip_tabs { j += 1; }
-                        while j < n && bytes[j].is_whitespace() { j += 1; }
-                        let (delim, next) = if j < n && (bytes[j] == '\'' || bytes[j] == '"') {
-                            let quote = bytes[j];
-                            let start = j + 1;
-                            let mut k = start;
-                            while k < n && bytes[k] != quote { k += 1; }
-                            (bytes[start..k.min(n)].iter().collect::<String>(), k + 1)
-                        } else {
-                            let start = j;
-                            let mut k = j;
-                            while k < n && !bytes[k].is_whitespace()
-                                && !";&|<>()".contains(bytes[k]) { k += 1; }
-                            (bytes[start..k].iter().collect::<String>(), k)
-                        };
-                        if !delim.is_empty() {
-                            pending.push((delim, strip_tabs));
-                        }
-                        i = next.max(i + 2);
-                        continue;
+                '\\' => {
+                    i += 1;
+                }
+                '<' if i + 1 < n && bytes[i + 1] == '<' && !(i + 2 < n && bytes[i + 2] == '<') => {
+                    // Found a heredoc operator; read the delimiter word.
+                    let mut j = i + 2;
+                    let strip_tabs = j < n && bytes[j] == '-';
+                    if strip_tabs {
+                        j += 1;
                     }
+                    while j < n && bytes[j].is_whitespace() {
+                        j += 1;
+                    }
+                    let (delim, next) = if j < n && (bytes[j] == '\'' || bytes[j] == '"') {
+                        let quote = bytes[j];
+                        let start = j + 1;
+                        let mut k = start;
+                        while k < n && bytes[k] != quote {
+                            k += 1;
+                        }
+                        (bytes[start..k.min(n)].iter().collect::<String>(), k + 1)
+                    } else {
+                        let start = j;
+                        let mut k = j;
+                        while k < n && !bytes[k].is_whitespace() && !";&|<>()".contains(bytes[k]) {
+                            k += 1;
+                        }
+                        (bytes[start..k].iter().collect::<String>(), k)
+                    };
+                    if !delim.is_empty() {
+                        pending.push((delim, strip_tabs));
+                    }
+                    i = next.max(i + 2);
+                    continue;
+                }
                 _ => {}
             }
             i += 1;
@@ -965,9 +1215,17 @@ pub fn read_line_editor(
     io::stdout().flush()?;
 
     loop {
-        let mut suggestion = if autosuggest_cfg.enabled && autosuggest_cfg.strategy != "none" && input.chars().count() >= autosuggest_cfg.min_chars as usize {
+        let mut suggestion = if autosuggest_cfg.enabled
+            && autosuggest_cfg.strategy != "none"
+            && input.chars().count() >= autosuggest_cfg.min_chars as usize
+        {
             if cached_suggestion.is_none() || input != last_suggest_input {
-                cached_suggestion = Some(find_suggestion(&input, history, autosuggest_cfg.case_sensitive, history_cfg.substring_search));
+                cached_suggestion = Some(find_suggestion(
+                    &input,
+                    history,
+                    autosuggest_cfg.case_sensitive,
+                    history_cfg.substring_search,
+                ));
                 last_suggest_input.clone_from(&input);
             }
             cached_suggestion.clone().unwrap_or_default()
@@ -1001,16 +1259,21 @@ pub fn read_line_editor(
                 redraw(&rctx, &input, cursor_pos, "")?;
                 continue;
             }
-            Event::Key(KeyEvent { code, modifiers, .. }) => {
+            Event::Key(KeyEvent {
+                code, modifiers, ..
+            }) => {
                 match mode {
                     EditorMode::ViNormal | EditorMode::ViVisual => {
                         let mut switched_to_insert = false;
                         if mode == EditorMode::ViVisual {
                             match code {
-                                KeyCode::Char('d') if !modifiers.contains(KeyModifiers::CONTROL) => {
+                                KeyCode::Char('d')
+                                    if !modifiers.contains(KeyModifiers::CONTROL) =>
+                                {
                                     let start = vi_visual_start.min(cursor_pos);
                                     let end = vi_visual_start.max(cursor_pos);
-                                    let deleted: String = input.chars().skip(start).take(end - start).collect();
+                                    let deleted: String =
+                                        input.chars().skip(start).take(end - start).collect();
                                     push_undo(&input, cursor_pos);
                                     vi_last_change = Some(ViChange::Delete(start, end));
                                     kill_ring_push(&deleted);
@@ -1022,33 +1285,42 @@ pub fn read_line_editor(
                                     redraw(&rctx, &input, cursor_pos, &suggestion)?;
                                     continue;
                                 }
-                                KeyCode::Char('y') if !modifiers.contains(KeyModifiers::CONTROL) => {
+                                KeyCode::Char('y')
+                                    if !modifiers.contains(KeyModifiers::CONTROL) =>
+                                {
                                     let start = vi_visual_start.min(cursor_pos);
                                     let end = vi_visual_start.max(cursor_pos);
-                                    let yanked: String = input.chars().skip(start).take(end - start).collect();
+                                    let yanked: String =
+                                        input.chars().skip(start).take(end - start).collect();
                                     kill_ring_push(&yanked);
                                     mode = EditorMode::ViNormal;
                                     redraw(&rctx, &input, cursor_pos, &suggestion)?;
                                     continue;
                                 }
-                                KeyCode::Char('u') if !modifiers.contains(KeyModifiers::CONTROL) => {
+                                KeyCode::Char('u')
+                                    if !modifiers.contains(KeyModifiers::CONTROL) =>
+                                {
                                     let start = vi_visual_start.min(cursor_pos);
                                     let end = vi_visual_start.max(cursor_pos);
                                     let byte_start = char_to_byte(&input, start);
                                     let byte_end = char_to_byte(&input, end);
-                                    let selected: String = input[byte_start..byte_end].to_lowercase();
+                                    let selected: String =
+                                        input[byte_start..byte_end].to_lowercase();
                                     push_undo(&input, cursor_pos);
                                     input.replace_range(byte_start..byte_end, &selected);
                                     mode = EditorMode::ViNormal;
                                     redraw(&rctx, &input, cursor_pos, &suggestion)?;
                                     continue;
                                 }
-                                KeyCode::Char('U') if !modifiers.contains(KeyModifiers::CONTROL) => {
+                                KeyCode::Char('U')
+                                    if !modifiers.contains(KeyModifiers::CONTROL) =>
+                                {
                                     let start = vi_visual_start.min(cursor_pos);
                                     let end = vi_visual_start.max(cursor_pos);
                                     let byte_start = char_to_byte(&input, start);
                                     let byte_end = char_to_byte(&input, end);
-                                    let selected: String = input[byte_start..byte_end].to_uppercase();
+                                    let selected: String =
+                                        input[byte_start..byte_end].to_uppercase();
                                     push_undo(&input, cursor_pos);
                                     input.replace_range(byte_start..byte_end, &selected);
                                     mode = EditorMode::ViNormal;
@@ -1104,7 +1376,9 @@ pub fn read_line_editor(
                                 redraw(&rctx, &input, cursor_pos, &suggestion)?;
                             }
                             KeyCode::Char('l') if !modifiers.contains(KeyModifiers::CONTROL) => {
-                                if cursor_pos < input.chars().count() { cursor_pos += 1; }
+                                if cursor_pos < input.chars().count() {
+                                    cursor_pos += 1;
+                                }
                                 redraw(&rctx, &input, cursor_pos, &suggestion)?;
                             }
                             KeyCode::Char('0') if !modifiers.contains(KeyModifiers::CONTROL) => {
@@ -1117,18 +1391,27 @@ pub fn read_line_editor(
                             }
                             KeyCode::Char('w') if !modifiers.contains(KeyModifiers::CONTROL) => {
                                 let chars: Vec<char> = input.chars().collect();
-                                let delims: Vec<char> = editor_cfg.word_delimiters.chars().collect();
+                                let delims: Vec<char> =
+                                    editor_cfg.word_delimiters.chars().collect();
                                 let mut pos = cursor_pos;
-                                while pos < chars.len() && delims.contains(&chars[pos]) { pos += 1; }
-                                while pos < chars.len() && !delims.contains(&chars[pos]) { pos += 1; }
+                                while pos < chars.len() && delims.contains(&chars[pos]) {
+                                    pos += 1;
+                                }
+                                while pos < chars.len() && !delims.contains(&chars[pos]) {
+                                    pos += 1;
+                                }
                                 cursor_pos = pos;
                                 redraw(&rctx, &input, cursor_pos, &suggestion)?;
                             }
                             KeyCode::Char('W') if !modifiers.contains(KeyModifiers::CONTROL) => {
                                 let chars: Vec<char> = input.chars().collect();
                                 let mut pos = cursor_pos;
-                                while pos < chars.len() && chars[pos].is_whitespace() { pos += 1; }
-                                while pos < chars.len() && !chars[pos].is_whitespace() { pos += 1; }
+                                while pos < chars.len() && chars[pos].is_whitespace() {
+                                    pos += 1;
+                                }
+                                while pos < chars.len() && !chars[pos].is_whitespace() {
+                                    pos += 1;
+                                }
                                 cursor_pos = pos;
                                 redraw(&rctx, &input, cursor_pos, &suggestion)?;
                             }
@@ -1136,28 +1419,44 @@ pub fn read_line_editor(
                                 // vi B — move back to start of previous WORD (whitespace-delimited)
                                 let chars: Vec<char> = input.chars().collect();
                                 let mut pos = cursor_pos;
-                                while pos > 0 && chars[pos - 1].is_whitespace() { pos -= 1; }
-                                while pos > 0 && !chars[pos - 1].is_whitespace() { pos -= 1; }
+                                while pos > 0 && chars[pos - 1].is_whitespace() {
+                                    pos -= 1;
+                                }
+                                while pos > 0 && !chars[pos - 1].is_whitespace() {
+                                    pos -= 1;
+                                }
                                 cursor_pos = pos;
                                 redraw(&rctx, &input, cursor_pos, &suggestion)?;
                             }
                             KeyCode::Char('b') if !modifiers.contains(KeyModifiers::CONTROL) => {
                                 let chars: Vec<char> = input.chars().collect();
-                                let delims: Vec<char> = editor_cfg.word_delimiters.chars().collect();
+                                let delims: Vec<char> =
+                                    editor_cfg.word_delimiters.chars().collect();
                                 let mut pos = cursor_pos;
-                                while pos > 0 && delims.contains(&chars[pos - 1]) { pos -= 1; }
-                                while pos > 0 && !delims.contains(&chars[pos - 1]) { pos -= 1; }
+                                while pos > 0 && delims.contains(&chars[pos - 1]) {
+                                    pos -= 1;
+                                }
+                                while pos > 0 && !delims.contains(&chars[pos - 1]) {
+                                    pos -= 1;
+                                }
                                 cursor_pos = pos;
                                 redraw(&rctx, &input, cursor_pos, &suggestion)?;
                             }
                             KeyCode::Char('e') if !modifiers.contains(KeyModifiers::CONTROL) => {
                                 let chars: Vec<char> = input.chars().collect();
-                                let delims: Vec<char> = editor_cfg.word_delimiters.chars().collect();
+                                let delims: Vec<char> =
+                                    editor_cfg.word_delimiters.chars().collect();
                                 let mut pos = cursor_pos;
                                 if pos < chars.len() {
-                                    while pos < chars.len() && delims.contains(&chars[pos]) { pos += 1; }
+                                    while pos < chars.len() && delims.contains(&chars[pos]) {
+                                        pos += 1;
+                                    }
                                     if pos < chars.len() {
-                                        while pos + 1 < chars.len() && !delims.contains(&chars[pos + 1]) { pos += 1; }
+                                        while pos + 1 < chars.len()
+                                            && !delims.contains(&chars[pos + 1])
+                                        {
+                                            pos += 1;
+                                        }
                                         cursor_pos = pos;
                                     }
                                 }
@@ -1192,16 +1491,25 @@ pub fn read_line_editor(
                                     redraw(&rctx, &input, cursor_pos, &suggestion)?;
                                 }
                             }
-                            KeyCode::Char('d') if !modifiers.contains(KeyModifiers::CONTROL) && last_vi_action.as_deref() != Some("d") => {
+                            KeyCode::Char('d')
+                                if !modifiers.contains(KeyModifiers::CONTROL)
+                                    && last_vi_action.as_deref() != Some("d") =>
+                            {
                                 last_vi_action = Some("d".to_string());
                             }
                             KeyCode::Char('d') if last_vi_action.as_deref() == Some("d") => {
                                 let byte_cursor = char_to_byte(&input, cursor_pos);
-                                let line_end_char = input.char_indices().skip(byte_cursor)
+                                let line_end_char = input
+                                    .char_indices()
+                                    .skip(byte_cursor)
                                     .find(|&(_, c)| c == '\n')
                                     .map(|(byte, _)| input[..byte].chars().count())
                                     .unwrap_or(input.chars().count());
-                                let killed: String = input.chars().skip(cursor_pos).take(line_end_char - cursor_pos).collect();
+                                let killed: String = input
+                                    .chars()
+                                    .skip(cursor_pos)
+                                    .take(line_end_char - cursor_pos)
+                                    .collect();
                                 push_undo(&input, cursor_pos);
                                 kill_ring_push(&killed);
                                 let byte_end = char_to_byte(&input, line_end_char);
@@ -1210,13 +1518,17 @@ pub fn read_line_editor(
                                 redraw(&rctx, &input, cursor_pos, &suggestion)?;
                             }
                             KeyCode::Char('D') if !modifiers.contains(KeyModifiers::CONTROL) => {
-                                let killed: String = input[char_to_byte(&input, cursor_pos)..].to_string();
+                                let killed: String =
+                                    input[char_to_byte(&input, cursor_pos)..].to_string();
                                 push_undo(&input, cursor_pos);
                                 kill_ring_push(&killed);
                                 input.truncate(char_to_byte(&input, cursor_pos));
                                 redraw(&rctx, &input, cursor_pos, &suggestion)?;
                             }
-                            KeyCode::Char('y') if !modifiers.contains(KeyModifiers::CONTROL) && last_vi_action.as_deref() != Some("y") => {
+                            KeyCode::Char('y')
+                                if !modifiers.contains(KeyModifiers::CONTROL)
+                                    && last_vi_action.as_deref() != Some("y") =>
+                            {
                                 last_vi_action = Some("y".to_string());
                             }
                             KeyCode::Char('y') if last_vi_action.as_deref() == Some("y") => {
@@ -1251,7 +1563,8 @@ pub fn read_line_editor(
                             }
                             KeyCode::Char('c') if !modifiers.contains(KeyModifiers::CONTROL) => {
                                 let old_text = input.clone();
-                                vi_last_change = Some(ViChange::Change(0, input.chars().count(), old_text));
+                                vi_last_change =
+                                    Some(ViChange::Change(0, input.chars().count(), old_text));
                                 mode = EditorMode::ViInsert;
                                 switched_to_insert = true;
                                 input.clear();
@@ -1267,7 +1580,10 @@ pub fn read_line_editor(
                                 }
                                 redraw(&rctx, &input, cursor_pos, &suggestion)?;
                             }
-                            KeyCode::Char('/') if mode == EditorMode::ViNormal && !modifiers.contains(KeyModifiers::CONTROL) => {
+                            KeyCode::Char('/')
+                                if mode == EditorMode::ViNormal
+                                    && !modifiers.contains(KeyModifiers::CONTROL) =>
+                            {
                                 let original = input.clone();
                                 let mut search = String::new();
                                 loop {
@@ -1289,11 +1605,23 @@ pub fn read_line_editor(
                                     }
                                     if let Ok(Event::Key(ev)) = event::read() {
                                         match ev.code {
-                                            KeyCode::Char('c') if ev.modifiers.contains(KeyModifiers::CONTROL) => { search.clear(); break; }
-                                            KeyCode::Char(c) => { search.push(c); }
-                                            KeyCode::Esc => { search.clear(); break; }
+                                            KeyCode::Char('c')
+                                                if ev.modifiers.contains(KeyModifiers::CONTROL) =>
+                                            {
+                                                search.clear();
+                                                break;
+                                            }
+                                            KeyCode::Char(c) => {
+                                                search.push(c);
+                                            }
+                                            KeyCode::Esc => {
+                                                search.clear();
+                                                break;
+                                            }
                                             KeyCode::Enter => break,
-                                            KeyCode::Backspace => { search.pop(); }
+                                            KeyCode::Backspace => {
+                                                search.pop();
+                                            }
                                             _ => {}
                                         }
                                     }
@@ -1319,7 +1647,10 @@ pub fn read_line_editor(
                                 }
                                 redraw(&rctx, &input, cursor_pos, &suggestion)?;
                             }
-                            KeyCode::Char('?') if mode == EditorMode::ViNormal && !modifiers.contains(KeyModifiers::CONTROL) => {
+                            KeyCode::Char('?')
+                                if mode == EditorMode::ViNormal
+                                    && !modifiers.contains(KeyModifiers::CONTROL) =>
+                            {
                                 let original = input.clone();
                                 let mut search = String::new();
                                 loop {
@@ -1341,11 +1672,23 @@ pub fn read_line_editor(
                                     }
                                     if let Ok(Event::Key(ev)) = event::read() {
                                         match ev.code {
-                                            KeyCode::Char('c') if ev.modifiers.contains(KeyModifiers::CONTROL) => { search.clear(); break; }
-                                            KeyCode::Char(c) => { search.push(c); }
-                                            KeyCode::Esc => { search.clear(); break; }
+                                            KeyCode::Char('c')
+                                                if ev.modifiers.contains(KeyModifiers::CONTROL) =>
+                                            {
+                                                search.clear();
+                                                break;
+                                            }
+                                            KeyCode::Char(c) => {
+                                                search.push(c);
+                                            }
+                                            KeyCode::Esc => {
+                                                search.clear();
+                                                break;
+                                            }
                                             KeyCode::Enter => break,
-                                            KeyCode::Backspace => { search.pop(); }
+                                            KeyCode::Backspace => {
+                                                search.pop();
+                                            }
                                             _ => {}
                                         }
                                     }
@@ -1368,11 +1711,17 @@ pub fn read_line_editor(
                                 }
                                 redraw(&rctx, &input, cursor_pos, &suggestion)?;
                             }
-                            KeyCode::Char('n') if mode == EditorMode::ViNormal && !modifiers.contains(KeyModifiers::CONTROL) => {
+                            KeyCode::Char('n')
+                                if mode == EditorMode::ViNormal
+                                    && !modifiers.contains(KeyModifiers::CONTROL) =>
+                            {
                                 if let Some(ref pat) = vi_search_pattern.clone() {
                                     let hist = HISTORY_CB.get().map(|cb| cb()).unwrap_or_default();
                                     let found = if vi_search_forward {
-                                        hist.iter().rev().find(|l| l.contains(pat.as_str())).cloned()
+                                        hist.iter()
+                                            .rev()
+                                            .find(|l| l.contains(pat.as_str()))
+                                            .cloned()
                                     } else {
                                         hist.iter().find(|l| l.contains(pat.as_str())).cloned()
                                     };
@@ -1383,11 +1732,17 @@ pub fn read_line_editor(
                                     redraw(&rctx, &input, cursor_pos, &suggestion)?;
                                 }
                             }
-                            KeyCode::Char('N') if mode == EditorMode::ViNormal && !modifiers.contains(KeyModifiers::CONTROL) => {
+                            KeyCode::Char('N')
+                                if mode == EditorMode::ViNormal
+                                    && !modifiers.contains(KeyModifiers::CONTROL) =>
+                            {
                                 if let Some(ref pat) = vi_search_pattern.clone() {
                                     let hist = HISTORY_CB.get().map(|cb| cb()).unwrap_or_default();
                                     let found = if !vi_search_forward {
-                                        hist.iter().rev().find(|l| l.contains(pat.as_str())).cloned()
+                                        hist.iter()
+                                            .rev()
+                                            .find(|l| l.contains(pat.as_str()))
+                                            .cloned()
                                     } else {
                                         hist.iter().find(|l| l.contains(pat.as_str())).cloned()
                                     };
@@ -1398,16 +1753,27 @@ pub fn read_line_editor(
                                     redraw(&rctx, &input, cursor_pos, &suggestion)?;
                                 }
                             }
-                            KeyCode::Char('J') if mode == EditorMode::ViNormal && !modifiers.contains(KeyModifiers::CONTROL) => {
-                                if let Some(nl_pos) = input[char_to_byte(&input, cursor_pos)..].find('\n') {
+                            KeyCode::Char('J')
+                                if mode == EditorMode::ViNormal
+                                    && !modifiers.contains(KeyModifiers::CONTROL) =>
+                            {
+                                if let Some(nl_pos) =
+                                    input[char_to_byte(&input, cursor_pos)..].find('\n')
+                                {
                                     let byte_pos = char_to_byte(&input, cursor_pos);
                                     let end = byte_pos + nl_pos;
-                                    let next_nl = input[end + 1..].find('\n').map(|p| end + 1 + p).unwrap_or(input.len());
+                                    let next_nl = input[end + 1..]
+                                        .find('\n')
+                                        .map(|p| end + 1 + p)
+                                        .unwrap_or(input.len());
                                     let removed: String = input[end..next_nl].chars().collect();
                                     let stripped = removed.trim_start();
                                     let replace = if stripped.starts_with('\\') { "" } else { " " };
                                     push_undo(&input, cursor_pos);
-                                    input.replace_range(char_to_byte(&input, cursor_pos)..next_nl, replace);
+                                    input.replace_range(
+                                        char_to_byte(&input, cursor_pos)..next_nl,
+                                        replace,
+                                    );
                                     redraw(&rctx, &input, cursor_pos, &suggestion)?;
                                 }
                             }
@@ -1419,11 +1785,19 @@ pub fn read_line_editor(
                                         let trimmed = last_line.trim_end();
                                         let mut bs_count = 0usize;
                                         for ch in trimmed.chars().rev() {
-                                            if ch == '\\' { bs_count += 1; } else { break; }
+                                            if ch == '\\' {
+                                                bs_count += 1;
+                                            } else {
+                                                break;
+                                            }
                                         }
                                         if bs_count % 2 == 1 {
                                             let strip = trimmed.len() - bs_count;
-                                            input = format!("{}{}", &input[..last_nl + strip], &input[last_nl + trimmed.len()..]);
+                                            input = format!(
+                                                "{}{}",
+                                                &input[..last_nl + strip],
+                                                &input[last_nl + trimmed.len()..]
+                                            );
                                         } else {
                                             input.push('\n');
                                         }
@@ -1460,11 +1834,19 @@ pub fn read_line_editor(
                                 switched_to_insert = true;
                                 redraw(&rctx, &input, cursor_pos, &suggestion)?;
                             }
-                            KeyCode::Char(c) if !modifiers.contains(KeyModifiers::CONTROL) && c.is_ascii_digit() && last_vi_action.as_deref() == Some("d") => {
+                            KeyCode::Char(c)
+                                if !modifiers.contains(KeyModifiers::CONTROL)
+                                    && c.is_ascii_digit()
+                                    && last_vi_action.as_deref() == Some("d") =>
+                            {
                                 if c == 'd' {
                                     let byte_cursor = char_to_byte(&input, cursor_pos);
-                                    let line_start = input[..byte_cursor].rfind('\n').map(|p| p + 1).unwrap_or(0);
-                                    let byte_end = input[byte_cursor..].find('\n')
+                                    let line_start = input[..byte_cursor]
+                                        .rfind('\n')
+                                        .map(|p| p + 1)
+                                        .unwrap_or(0);
+                                    let byte_end = input[byte_cursor..]
+                                        .find('\n')
                                         .map(|p| byte_cursor + p)
                                         .unwrap_or(input.len());
                                     let killed: String = input[line_start..byte_end].to_string();
@@ -1483,7 +1865,10 @@ pub fn read_line_editor(
                                 cursor_pos = input.chars().count();
                                 redraw(&rctx, &input, cursor_pos, &suggestion)?;
                             }
-                            KeyCode::Char('g') if !modifiers.contains(KeyModifiers::CONTROL) && last_vi_action.as_deref() == Some("g") => {
+                            KeyCode::Char('g')
+                                if !modifiers.contains(KeyModifiers::CONTROL)
+                                    && last_vi_action.as_deref() == Some("g") =>
+                            {
                                 cursor_pos = 0;
                                 last_vi_action = None;
                                 redraw(&rctx, &input, cursor_pos, &suggestion)?;
@@ -1493,49 +1878,74 @@ pub fn read_line_editor(
                             }
                             KeyCode::Char('f') if !modifiers.contains(KeyModifiers::CONTROL) => {
                                 if let Ok(next_ev) = event::read()
-                                    && let Event::Key(KeyEvent { code: KeyCode::Char(c), .. }) = next_ev {
-                                        let chars: Vec<char> = input.chars().collect();
-                                        if let Some(rel) = chars[cursor_pos+1..].iter().position(|&ch| ch == c) {
-                                            cursor_pos += 1 + rel;
-                                        }
+                                    && let Event::Key(KeyEvent {
+                                        code: KeyCode::Char(c),
+                                        ..
+                                    }) = next_ev
+                                {
+                                    let chars: Vec<char> = input.chars().collect();
+                                    if let Some(rel) =
+                                        chars[cursor_pos + 1..].iter().position(|&ch| ch == c)
+                                    {
+                                        cursor_pos += 1 + rel;
                                     }
+                                }
                                 redraw(&rctx, &input, cursor_pos, &suggestion)?;
                             }
                             KeyCode::Char('F') if !modifiers.contains(KeyModifiers::CONTROL) => {
                                 if let Ok(next_ev) = event::read()
-                                    && let Event::Key(KeyEvent { code: KeyCode::Char(c), .. }) = next_ev {
-                                        let chars: Vec<char> = input.chars().collect();
-                                        if cursor_pos > 0
-                                            && let Some(rel) = chars[..cursor_pos].iter().rev().position(|&ch| ch == c) {
-                                                cursor_pos -= 1 + rel;
-                                            }
+                                    && let Event::Key(KeyEvent {
+                                        code: KeyCode::Char(c),
+                                        ..
+                                    }) = next_ev
+                                {
+                                    let chars: Vec<char> = input.chars().collect();
+                                    if cursor_pos > 0
+                                        && let Some(rel) =
+                                            chars[..cursor_pos].iter().rev().position(|&ch| ch == c)
+                                    {
+                                        cursor_pos -= 1 + rel;
                                     }
+                                }
                                 redraw(&rctx, &input, cursor_pos, &suggestion)?;
                             }
                             KeyCode::Char('t') if !modifiers.contains(KeyModifiers::CONTROL) => {
                                 if let Ok(next_ev) = event::read()
-                                    && let Event::Key(KeyEvent { code: KeyCode::Char(c), .. }) = next_ev {
-                                        let chars: Vec<char> = input.chars().collect();
-                                        if let Some(rel) = chars[cursor_pos+1..].iter().position(|&ch| ch == c) {
-                                            cursor_pos += rel;
-                                        }
+                                    && let Event::Key(KeyEvent {
+                                        code: KeyCode::Char(c),
+                                        ..
+                                    }) = next_ev
+                                {
+                                    let chars: Vec<char> = input.chars().collect();
+                                    if let Some(rel) =
+                                        chars[cursor_pos + 1..].iter().position(|&ch| ch == c)
+                                    {
+                                        cursor_pos += rel;
                                     }
+                                }
                                 redraw(&rctx, &input, cursor_pos, &suggestion)?;
                             }
                             KeyCode::Char('T') if !modifiers.contains(KeyModifiers::CONTROL) => {
                                 if let Ok(next_ev) = event::read()
-                                    && let Event::Key(KeyEvent { code: KeyCode::Char(c), .. }) = next_ev {
-                                        let chars: Vec<char> = input.chars().collect();
-                                        if cursor_pos > 0
-                                            && let Some(rel) = chars[..cursor_pos].iter().rev().position(|&ch| ch == c) {
-                                                cursor_pos = cursor_pos.saturating_sub(rel);
-                                            }
+                                    && let Event::Key(KeyEvent {
+                                        code: KeyCode::Char(c),
+                                        ..
+                                    }) = next_ev
+                                {
+                                    let chars: Vec<char> = input.chars().collect();
+                                    if cursor_pos > 0
+                                        && let Some(rel) =
+                                            chars[..cursor_pos].iter().rev().position(|&ch| ch == c)
+                                    {
+                                        cursor_pos = cursor_pos.saturating_sub(rel);
                                     }
+                                }
                                 redraw(&rctx, &input, cursor_pos, &suggestion)?;
                             }
                             KeyCode::Char('C') if !modifiers.contains(KeyModifiers::CONTROL) => {
                                 push_undo(&input, cursor_pos);
-                                vi_last_change = Some(ViChange::Delete(cursor_pos, input.chars().count()));
+                                vi_last_change =
+                                    Some(ViChange::Delete(cursor_pos, input.chars().count()));
                                 let killed: String = input.chars().skip(cursor_pos).collect();
                                 kill_ring_push(&killed);
                                 input.truncate(char_to_byte(&input, cursor_pos));
@@ -1544,11 +1954,16 @@ pub fn read_line_editor(
                                 redraw(&rctx, &input, cursor_pos, &suggestion)?;
                             }
                             KeyCode::Char('Y') if !modifiers.contains(KeyModifiers::CONTROL) => {
-                                let line_start_byte = input[..char_to_byte(&input, cursor_pos)].rfind('\n').map(|p| p + 1).unwrap_or(0);
-                                let line_end_byte = input[char_to_byte(&input, cursor_pos)..].find('\n')
+                                let line_start_byte = input[..char_to_byte(&input, cursor_pos)]
+                                    .rfind('\n')
+                                    .map(|p| p + 1)
+                                    .unwrap_or(0);
+                                let line_end_byte = input[char_to_byte(&input, cursor_pos)..]
+                                    .find('\n')
                                     .map(|p| char_to_byte(&input, cursor_pos) + p)
                                     .unwrap_or(input.len());
-                                let killed: String = input[line_start_byte..line_end_byte].to_string();
+                                let killed: String =
+                                    input[line_start_byte..line_end_byte].to_string();
                                 kill_ring_push(&killed);
                                 redraw(&rctx, &input, cursor_pos, &suggestion)?;
                             }
@@ -1630,9 +2045,13 @@ pub fn read_line_editor(
                             };
                             if !mode_text.is_empty() {
                                 let color = match &mode {
-                                    EditorMode::ViInsert => hex_to_ansi(&prompt_cfg.vi_cmd_color_success),
+                                    EditorMode::ViInsert => {
+                                        hex_to_ansi(&prompt_cfg.vi_cmd_color_success)
+                                    }
                                     EditorMode::ViNormal => hex_to_ansi(&prompt_cfg.vi_cmd_color),
-                                    EditorMode::ViVisual => hex_to_ansi(&prompt_cfg.vi_cmd_color_error),
+                                    EditorMode::ViVisual => {
+                                        hex_to_ansi(&prompt_cfg.vi_cmd_color_error)
+                                    }
                                     EditorMode::Emacs => String::new(),
                                 };
                                 print!("\x1b[s");
@@ -1649,475 +2068,607 @@ pub fn read_line_editor(
                         // Emacs mode / Vi insert mode
                         let key_str = format_key(code, modifiers);
                         if let Some(widget) = custom_bindings.get(&key_str) {
-                            exec_widget(widget, &mut input, &mut cursor_pos, history, &mut history_offset, &mut temp_buf, &editor_cfg.word_delimiters, clipboard_cfg);
+                            exec_widget(
+                                widget,
+                                &mut input,
+                                &mut cursor_pos,
+                                history,
+                                &mut history_offset,
+                                &mut temp_buf,
+                                &editor_cfg.word_delimiters,
+                                clipboard_cfg,
+                            );
                             redraw(&rctx, &input, cursor_pos, &suggestion)?;
                         } else {
-                        // Check configurable autosuggestion accept keys before the main match
-                        if !suggestion.is_empty() && cursor_pos == input.chars().count() {
-                            if matches_key_event(code, modifiers, &autosuggest_cfg.accept_key) {
-                                input = format!("{}{}", input, suggestion);
-                                cursor_pos = input.chars().count();
-                                history_offset = None;
-                                redraw(&rctx, &input, cursor_pos, "")?;
-                                continue;
-                            } else if matches_key_event(code, modifiers, &autosuggest_cfg.accept_word_key) {
-                                let suffix = suggestion;
-                                let chars: Vec<char> = input.chars().collect();
-                                let after: String = chars[cursor_pos..].iter().collect();
-                                let delimiters: Vec<char> = editor_cfg.word_delimiters.chars().collect();
-                                let mut word_end = 0;
-                                let suffix_chars: Vec<char> = suffix.chars().collect();
-                                while word_end < suffix_chars.len() {
-                                    if delimiters.contains(&suffix_chars[word_end]) && word_end > 0 {
-                                        break;
-                                    }
-                                    word_end += 1;
-                                }
-                                let word: String = suffix_chars[..word_end].iter().collect();
-                                let before: String = chars[..cursor_pos].iter().collect();
-                                input = format!("{}{}{}", before, word, after);
-                                cursor_pos += word.chars().count();
-                                history_offset = None;
-                                redraw(&rctx, &input, cursor_pos, "")?;
-                                continue;
-                            }
-                        }
-                        match code {
-                            KeyCode::Enter => {
-                                if is_input_incomplete(&input) {
-                                    if input.trim_end().ends_with('\\') {
-                                        let last_nl = input.rfind('\n').map(|p| p + 1).unwrap_or(0);
-                                        let last_line = &input[last_nl..];
-                                        let trimmed = last_line.trim_end();
-                                        let mut bs_count = 0usize;
-                                        for ch in trimmed.chars().rev() {
-                                            if ch == '\\' { bs_count += 1; } else { break; }
-                                        }
-                                        if bs_count % 2 == 1 {
-                                            let strip = trimmed.len() - bs_count;
-                                            input = format!("{}{}", &input[..last_nl + strip], &input[last_nl + trimmed.len()..]);
-                                        } else {
-                                            input.push('\n');
-                                        }
-                                    } else {
-                                        input.push('\n');
-                                    }
+                            // Check configurable autosuggestion accept keys before the main match
+                            if !suggestion.is_empty() && cursor_pos == input.chars().count() {
+                                if matches_key_event(code, modifiers, &autosuggest_cfg.accept_key) {
+                                    input = format!("{}{}", input, suggestion);
                                     cursor_pos = input.chars().count();
-                                    let (ps2, from_env) = ps2_display();
-                                    if from_env {
-                                        eprint!("{}", ps2);
-                                        let _ = io::stderr().flush();
+                                    history_offset = None;
+                                    redraw(&rctx, &input, cursor_pos, "")?;
+                                    continue;
+                                } else if matches_key_event(
+                                    code,
+                                    modifiers,
+                                    &autosuggest_cfg.accept_word_key,
+                                ) {
+                                    let suffix = suggestion;
+                                    let chars: Vec<char> = input.chars().collect();
+                                    let after: String = chars[cursor_pos..].iter().collect();
+                                    let delimiters: Vec<char> =
+                                        editor_cfg.word_delimiters.chars().collect();
+                                    let mut word_end = 0;
+                                    let suffix_chars: Vec<char> = suffix.chars().collect();
+                                    while word_end < suffix_chars.len() {
+                                        if delimiters.contains(&suffix_chars[word_end])
+                                            && word_end > 0
+                                        {
+                                            break;
+                                        }
+                                        word_end += 1;
                                     }
-                                    rctx.prompt = Cow::Owned(PromptDisplay {
-                                        lines_above: vec![],
-                                        input_prefix: if from_env { String::new() } else { ps2 },
-                                        lines_below: vec![],
-                                        right_prompt: String::new(),
-                                        right_prompt_color: String::new(),
-                                        right_prompt_hide_threshold: 0.0,
-                                    });
+                                    let word: String = suffix_chars[..word_end].iter().collect();
+                                    let before: String = chars[..cursor_pos].iter().collect();
+                                    input = format!("{}{}{}", before, word, after);
+                                    cursor_pos += word.chars().count();
+                                    history_offset = None;
                                     redraw(&rctx, &input, cursor_pos, "")?;
                                     continue;
                                 }
-                                if editor_cfg.bracketed_paste {
-                                    print!("\x1b[?2004l");
-                                }
-                                print!("\r\n");
-                                io::stdout().flush()?;
-                                return Ok(input);
                             }
-                            KeyCode::Char('t') if modifiers.contains(KeyModifiers::CONTROL) && editor_cfg.emacs_overwrite_mode => {
-                                overwrite_mode = !overwrite_mode;
-                            }
-                            KeyCode::Char('c') if modifiers.contains(KeyModifiers::CONTROL) => {
-                                print!("^C\r\n");
-                                input.clear();
-                                cursor_pos = 0;
-                                rctx.prompt = Cow::Borrowed(prompt);
-                                redraw(&rctx, &input, cursor_pos, "")?;
-                            }
-                            KeyCode::Char('d') if modifiers.contains(KeyModifiers::CONTROL) => {
-                                if input.is_empty() {
+                            match code {
+                                KeyCode::Enter => {
+                                    if is_input_incomplete(&input) {
+                                        if input.trim_end().ends_with('\\') {
+                                            let last_nl =
+                                                input.rfind('\n').map(|p| p + 1).unwrap_or(0);
+                                            let last_line = &input[last_nl..];
+                                            let trimmed = last_line.trim_end();
+                                            let mut bs_count = 0usize;
+                                            for ch in trimmed.chars().rev() {
+                                                if ch == '\\' {
+                                                    bs_count += 1;
+                                                } else {
+                                                    break;
+                                                }
+                                            }
+                                            if bs_count % 2 == 1 {
+                                                let strip = trimmed.len() - bs_count;
+                                                input = format!(
+                                                    "{}{}",
+                                                    &input[..last_nl + strip],
+                                                    &input[last_nl + trimmed.len()..]
+                                                );
+                                            } else {
+                                                input.push('\n');
+                                            }
+                                        } else {
+                                            input.push('\n');
+                                        }
+                                        cursor_pos = input.chars().count();
+                                        let (ps2, from_env) = ps2_display();
+                                        if from_env {
+                                            eprint!("{}", ps2);
+                                            let _ = io::stderr().flush();
+                                        }
+                                        rctx.prompt = Cow::Owned(PromptDisplay {
+                                            lines_above: vec![],
+                                            input_prefix: if from_env {
+                                                String::new()
+                                            } else {
+                                                ps2
+                                            },
+                                            lines_below: vec![],
+                                            right_prompt: String::new(),
+                                            right_prompt_color: String::new(),
+                                            right_prompt_hide_threshold: 0.0,
+                                        });
+                                        redraw(&rctx, &input, cursor_pos, "")?;
+                                        continue;
+                                    }
                                     if editor_cfg.bracketed_paste {
                                         print!("\x1b[?2004l");
                                     }
-                                    print!("{}\r\n", symbols_cfg.exit_prefix);
-                                    crate::shell::signals::SHOULD_EXIT.store(true, std::sync::atomic::Ordering::SeqCst);
-                                    crate::shell::signals::EXIT_CODE.store(0, std::sync::atomic::Ordering::SeqCst);
-                                    return Ok(String::new());
+                                    print!("\r\n");
+                                    io::stdout().flush()?;
+                                    return Ok(input);
                                 }
-                            }
-                            KeyCode::Char('l') if modifiers.contains(KeyModifiers::CONTROL) => {
-                                print!("\x1b[2J\x1b[H");
-                                render_display(&rctx, &input, cursor_pos, &suggestion)?;
-                            }
-                            KeyCode::Char('a') if modifiers.contains(KeyModifiers::CONTROL) => {
-                                cursor_pos = 0;
-                                redraw(&rctx, &input, cursor_pos, &suggestion)?;
-                            }
-                            KeyCode::Char('e') if modifiers.contains(KeyModifiers::CONTROL) => {
-                                cursor_pos = input.chars().count();
-                                redraw(&rctx, &input, cursor_pos, &suggestion)?;
-                            }
-                            KeyCode::Char('k') if modifiers.contains(KeyModifiers::CONTROL) => {
-                                let killed: String = input[char_to_byte(&input, cursor_pos)..].to_string();
-                                push_undo(&input, cursor_pos);
-                                kill_ring_push(&killed);
-                                input.truncate(char_to_byte(&input, cursor_pos));
-                                history_offset = None;
-                                suggestion.clear();
-                                redraw(&rctx, &input, cursor_pos, &suggestion)?;
-                            }
-                            KeyCode::Char('u') if modifiers.contains(KeyModifiers::CONTROL) => {
-                                let killed: String = input[..char_to_byte(&input, cursor_pos)].to_string();
-                                push_undo(&input, cursor_pos);
-                                kill_ring_push(&killed);
-                                let tail: String = input[char_to_byte(&input, cursor_pos)..].to_string();
-                                input.clear();
-                                input.push_str(&tail);
-                                cursor_pos = 0;
-                                history_offset = None;
-                                suggestion.clear();
-                                redraw(&rctx, &input, cursor_pos, &suggestion)?;
-                            }
-                            KeyCode::Char('w') if modifiers.contains(KeyModifiers::CONTROL) => {
-                                let chars: Vec<char> = input.chars().collect();
-                                let mut new_pos = cursor_pos;
-                                while new_pos > 0 && chars[new_pos - 1].is_whitespace() {
-                                    new_pos -= 1;
+                                KeyCode::Char('t')
+                                    if modifiers.contains(KeyModifiers::CONTROL)
+                                        && editor_cfg.emacs_overwrite_mode =>
+                                {
+                                    overwrite_mode = !overwrite_mode;
                                 }
-                                while new_pos > 0 && !chars[new_pos - 1].is_whitespace() {
-                                    new_pos -= 1;
+                                KeyCode::Char('c') if modifiers.contains(KeyModifiers::CONTROL) => {
+                                    print!("^C\r\n");
+                                    input.clear();
+                                    cursor_pos = 0;
+                                    rctx.prompt = Cow::Borrowed(prompt);
+                                    redraw(&rctx, &input, cursor_pos, "")?;
                                 }
-                                if new_pos < cursor_pos {
-                                    let byte_start = char_to_byte(&input, new_pos);
-                                    let byte_end = char_to_byte(&input, cursor_pos);
-                                    let killed: String = input[byte_start..byte_end].to_string();
+                                KeyCode::Char('d') if modifiers.contains(KeyModifiers::CONTROL) => {
+                                    if input.is_empty() {
+                                        if editor_cfg.bracketed_paste {
+                                            print!("\x1b[?2004l");
+                                        }
+                                        print!("{}\r\n", symbols_cfg.exit_prefix);
+                                        crate::shell::signals::SHOULD_EXIT
+                                            .store(true, std::sync::atomic::Ordering::SeqCst);
+                                        crate::shell::signals::EXIT_CODE
+                                            .store(0, std::sync::atomic::Ordering::SeqCst);
+                                        return Ok(String::new());
+                                    }
+                                }
+                                KeyCode::Char('l') if modifiers.contains(KeyModifiers::CONTROL) => {
+                                    print!("\x1b[2J\x1b[H");
+                                    render_display(&rctx, &input, cursor_pos, &suggestion)?;
+                                }
+                                KeyCode::Char('a') if modifiers.contains(KeyModifiers::CONTROL) => {
+                                    cursor_pos = 0;
+                                    redraw(&rctx, &input, cursor_pos, &suggestion)?;
+                                }
+                                KeyCode::Char('e') if modifiers.contains(KeyModifiers::CONTROL) => {
+                                    cursor_pos = input.chars().count();
+                                    redraw(&rctx, &input, cursor_pos, &suggestion)?;
+                                }
+                                KeyCode::Char('k') if modifiers.contains(KeyModifiers::CONTROL) => {
+                                    let killed: String =
+                                        input[char_to_byte(&input, cursor_pos)..].to_string();
                                     push_undo(&input, cursor_pos);
                                     kill_ring_push(&killed);
-                                    input.drain(byte_start..byte_end);
-                                    cursor_pos = new_pos;
+                                    input.truncate(char_to_byte(&input, cursor_pos));
                                     history_offset = None;
                                     suggestion.clear();
                                     redraw(&rctx, &input, cursor_pos, &suggestion)?;
                                 }
-                            }
-                            KeyCode::Char('y') if modifiers.contains(KeyModifiers::CONTROL) => {
-                                if let Some(yanked) = kill_ring_yank() {
-                                    if clipboard_cfg.yank_to_clipboard {
-                                        clipboard_copy(&yanked, clipboard_cfg);
-                                    }
+                                KeyCode::Char('u') if modifiers.contains(KeyModifiers::CONTROL) => {
+                                    let killed: String =
+                                        input[..char_to_byte(&input, cursor_pos)].to_string();
                                     push_undo(&input, cursor_pos);
-                                    let before: String = input.chars().take(cursor_pos).collect();
-                                    let after: String = input.chars().skip(cursor_pos).collect();
-                                    input = format!("{}{}{}", before, yanked, after);
-                                    cursor_pos += yanked.chars().count();
+                                    kill_ring_push(&killed);
+                                    let tail: String =
+                                        input[char_to_byte(&input, cursor_pos)..].to_string();
+                                    input.clear();
+                                    input.push_str(&tail);
+                                    cursor_pos = 0;
                                     history_offset = None;
+                                    suggestion.clear();
                                     redraw(&rctx, &input, cursor_pos, &suggestion)?;
                                 }
-                            }
-                            KeyCode::Char('z') if modifiers.contains(KeyModifiers::CONTROL) => {
-                                if let Some((prev, prev_cursor)) = undo(&input, cursor_pos) {
-                                    input = prev;
-                                    cursor_pos = prev_cursor;
-                                    redraw(&rctx, &input, cursor_pos, &suggestion)?;
-                                }
-                            }
-                            KeyCode::Char('_') if modifiers.contains(KeyModifiers::CONTROL) => {
-                                if let Some((next, next_cursor)) = redo(&input, cursor_pos) {
-                                    input = next;
-                                    cursor_pos = next_cursor;
-                                    redraw(&rctx, &input, cursor_pos, &suggestion)?;
-                                }
-                            }
-                            KeyCode::Right if !modifiers.contains(KeyModifiers::CONTROL) && cursor_pos < input.chars().count() => {
-                                cursor_pos += 1;
-                                redraw(&rctx, &input, cursor_pos, &suggestion)?;
-                            }
-                            KeyCode::Char('f') if modifiers.contains(KeyModifiers::ALT) => {
-                                if cursor_pos < input.chars().count() {
-                                    let delimiters: Vec<char> = editor_cfg.word_delimiters.chars().collect();
+                                KeyCode::Char('w') if modifiers.contains(KeyModifiers::CONTROL) => {
                                     let chars: Vec<char> = input.chars().collect();
-                                    let mut pos = cursor_pos;
-                                    while pos < chars.len() && delimiters.contains(&chars[pos]) {
-                                        pos += 1;
+                                    let mut new_pos = cursor_pos;
+                                    while new_pos > 0 && chars[new_pos - 1].is_whitespace() {
+                                        new_pos -= 1;
                                     }
-                                    while pos < chars.len() && !delimiters.contains(&chars[pos]) {
-                                        pos += 1;
+                                    while new_pos > 0 && !chars[new_pos - 1].is_whitespace() {
+                                        new_pos -= 1;
                                     }
-                                    let moved = pos - cursor_pos;
-                                    if moved > 0 {
-                                        cursor_pos = pos;
-                                        print!("\x1b[{}C", moved);
-                                        io::stdout().flush()?;
+                                    if new_pos < cursor_pos {
+                                        let byte_start = char_to_byte(&input, new_pos);
+                                        let byte_end = char_to_byte(&input, cursor_pos);
+                                        let killed: String =
+                                            input[byte_start..byte_end].to_string();
+                                        push_undo(&input, cursor_pos);
+                                        kill_ring_push(&killed);
+                                        input.drain(byte_start..byte_end);
+                                        cursor_pos = new_pos;
+                                        history_offset = None;
+                                        suggestion.clear();
+                                        redraw(&rctx, &input, cursor_pos, &suggestion)?;
                                     }
                                 }
-                            }
-                            KeyCode::Char('r') if modifiers.contains(KeyModifiers::CONTROL) => {
-                                let saved_input = input.clone();
-                                let saved_cursor = cursor_pos;
-                                let prompt_prefix = rctx.prompt.input_prefix.clone();
-                                print!("\x1b[2K\r{}(reverse-i-search)`': ", prompt_prefix);
-                                io::stdout().flush()?;
-                                let mut search_buf = String::new();
-                                let mut cur_idx: Option<usize> = None;
-                                let find_from = |needle: &str, end: usize| -> Option<usize> {
-                                    if needle.is_empty() { return None; }
-                                    (0..end.min(history.len())).rev().find(|&i| {
-                                        let h = &history[i];
-                                        if history_cfg.search_case_sensitive {
-                                            h.contains(needle)
-                                        } else {
-                                            h.to_lowercase().contains(&needle.to_lowercase())
+                                KeyCode::Char('y') if modifiers.contains(KeyModifiers::CONTROL) => {
+                                    if let Some(yanked) = kill_ring_yank() {
+                                        if clipboard_cfg.yank_to_clipboard {
+                                            clipboard_copy(&yanked, clipboard_cfg);
                                         }
-                                    })
-                                };
-                                let render_search = |prefix: &str, query: &str, matched: Option<&str>, failed: bool| -> io::Result<()> {
-                                    let label = if failed { "failed " } else { "" };
-                                    print!("\x1b[2K\r{}({}reverse-i-search)`{}': ", prefix, label, query);
-                                    if let Some(line) = matched {
-                                        print!("{}", highlight_line(line, editor_cfg.colorize_output, colors_cfg));
+                                        push_undo(&input, cursor_pos);
+                                        let before: String =
+                                            input.chars().take(cursor_pos).collect();
+                                        let after: String =
+                                            input.chars().skip(cursor_pos).collect();
+                                        input = format!("{}{}{}", before, yanked, after);
+                                        cursor_pos += yanked.chars().count();
+                                        history_offset = None;
+                                        redraw(&rctx, &input, cursor_pos, &suggestion)?;
                                     }
-                                    io::stdout().flush()
-                                };
-                                loop {
-                                    let ev = match event::read() {
-                                        Ok(e) => e,
-                                        Err(_) => {
-                                            std::thread::sleep(std::time::Duration::from_millis(10));
-                                            continue;
+                                }
+                                KeyCode::Char('z') if modifiers.contains(KeyModifiers::CONTROL) => {
+                                    if let Some((prev, prev_cursor)) = undo(&input, cursor_pos) {
+                                        input = prev;
+                                        cursor_pos = prev_cursor;
+                                        redraw(&rctx, &input, cursor_pos, &suggestion)?;
+                                    }
+                                }
+                                KeyCode::Char('_') if modifiers.contains(KeyModifiers::CONTROL) => {
+                                    if let Some((next, next_cursor)) = redo(&input, cursor_pos) {
+                                        input = next;
+                                        cursor_pos = next_cursor;
+                                        redraw(&rctx, &input, cursor_pos, &suggestion)?;
+                                    }
+                                }
+                                KeyCode::Right
+                                    if !modifiers.contains(KeyModifiers::CONTROL)
+                                        && cursor_pos < input.chars().count() =>
+                                {
+                                    cursor_pos += 1;
+                                    redraw(&rctx, &input, cursor_pos, &suggestion)?;
+                                }
+                                KeyCode::Char('f') if modifiers.contains(KeyModifiers::ALT) => {
+                                    if cursor_pos < input.chars().count() {
+                                        let delimiters: Vec<char> =
+                                            editor_cfg.word_delimiters.chars().collect();
+                                        let chars: Vec<char> = input.chars().collect();
+                                        let mut pos = cursor_pos;
+                                        while pos < chars.len() && delimiters.contains(&chars[pos])
+                                        {
+                                            pos += 1;
                                         }
+                                        while pos < chars.len() && !delimiters.contains(&chars[pos])
+                                        {
+                                            pos += 1;
+                                        }
+                                        let moved = pos - cursor_pos;
+                                        if moved > 0 {
+                                            cursor_pos = pos;
+                                            print!("\x1b[{}C", moved);
+                                            io::stdout().flush()?;
+                                        }
+                                    }
+                                }
+                                KeyCode::Char('r') if modifiers.contains(KeyModifiers::CONTROL) => {
+                                    let saved_input = input.clone();
+                                    let saved_cursor = cursor_pos;
+                                    let prompt_prefix = rctx.prompt.input_prefix.clone();
+                                    print!("\x1b[2K\r{}(reverse-i-search)`': ", prompt_prefix);
+                                    io::stdout().flush()?;
+                                    let mut search_buf = String::new();
+                                    let mut cur_idx: Option<usize> = None;
+                                    let find_from = |needle: &str, end: usize| -> Option<usize> {
+                                        if needle.is_empty() {
+                                            return None;
+                                        }
+                                        (0..end.min(history.len())).rev().find(|&i| {
+                                            let h = &history[i];
+                                            if history_cfg.search_case_sensitive {
+                                                h.contains(needle)
+                                            } else {
+                                                h.to_lowercase().contains(&needle.to_lowercase())
+                                            }
+                                        })
                                     };
-                                    if let Event::Key(KeyEvent { code: sc, modifiers: sm, .. }) = ev {
-                                        match sc {
-                                            KeyCode::Char(c) if !sm.contains(KeyModifiers::CONTROL) => {
-                                                search_buf.push(c);
-                                                cur_idx = find_from(&search_buf, history.len());
-                                                render_search(&prompt_prefix, &search_buf, cur_idx.map(|i| history[i].as_str()), false)?;
+                                    let render_search =
+                                        |prefix: &str,
+                                         query: &str,
+                                         matched: Option<&str>,
+                                         failed: bool|
+                                         -> io::Result<()> {
+                                            let label = if failed { "failed " } else { "" };
+                                            print!(
+                                                "\x1b[2K\r{}({}reverse-i-search)`{}': ",
+                                                prefix, label, query
+                                            );
+                                            if let Some(line) = matched {
+                                                print!(
+                                                    "{}",
+                                                    highlight_line(
+                                                        line,
+                                                        editor_cfg.colorize_output,
+                                                        colors_cfg
+                                                    )
+                                                );
                                             }
-                                            KeyCode::Char('r') if sm.contains(KeyModifiers::CONTROL) => {
-                                                let start = cur_idx.unwrap_or(history.len());
-                                                if start > 0
-                                                    && let Some(idx) = find_from(&search_buf, start) {
-                                                    cur_idx = Some(idx);
-                                                    render_search(&prompt_prefix, &search_buf, Some(history[idx].as_str()), false)?;
-                                                } else {
-                                                    render_search(&prompt_prefix, &search_buf, None, true)?;
+                                            io::stdout().flush()
+                                        };
+                                    loop {
+                                        let ev = match event::read() {
+                                            Ok(e) => e,
+                                            Err(_) => {
+                                                std::thread::sleep(
+                                                    std::time::Duration::from_millis(10),
+                                                );
+                                                continue;
+                                            }
+                                        };
+                                        if let Event::Key(KeyEvent {
+                                            code: sc,
+                                            modifiers: sm,
+                                            ..
+                                        }) = ev
+                                        {
+                                            match sc {
+                                                KeyCode::Char(c)
+                                                    if !sm.contains(KeyModifiers::CONTROL) =>
+                                                {
+                                                    search_buf.push(c);
+                                                    cur_idx = find_from(&search_buf, history.len());
+                                                    render_search(
+                                                        &prompt_prefix,
+                                                        &search_buf,
+                                                        cur_idx.map(|i| history[i].as_str()),
+                                                        false,
+                                                    )?;
                                                 }
-                                            }
-                                            KeyCode::Backspace => {
-                                                search_buf.pop();
-                                                cur_idx = find_from(&search_buf, history.len());
-                                                render_search(&prompt_prefix, &search_buf, cur_idx.map(|i| history[i].as_str()), false)?;
-                                            }
-                                            KeyCode::Enter => {
-                                                if is_input_incomplete(&input) {
-                                                    if input.trim_end().ends_with('\\') {
-                                                        let last_nl = input.rfind('\n').map(|p| p + 1).unwrap_or(0);
-                                                        let last_line = &input[last_nl..];
-                                                        let trimmed = last_line.trim_end();
-                                                        let mut bs_count = 0usize;
-                                                        for ch in trimmed.chars().rev() {
-                                                            if ch == '\\' { bs_count += 1; } else { break; }
-                                                        }
-                                                        if bs_count % 2 == 1 {
-                                                            let strip = trimmed.len() - bs_count;
-                                                            input = format!("{}{}", &input[..last_nl + strip], &input[last_nl + trimmed.len()..]);
+                                                KeyCode::Char('r')
+                                                    if sm.contains(KeyModifiers::CONTROL) =>
+                                                {
+                                                    let start = cur_idx.unwrap_or(history.len());
+                                                    if start > 0
+                                                        && let Some(idx) =
+                                                            find_from(&search_buf, start)
+                                                    {
+                                                        cur_idx = Some(idx);
+                                                        render_search(
+                                                            &prompt_prefix,
+                                                            &search_buf,
+                                                            Some(history[idx].as_str()),
+                                                            false,
+                                                        )?;
+                                                    } else {
+                                                        render_search(
+                                                            &prompt_prefix,
+                                                            &search_buf,
+                                                            None,
+                                                            true,
+                                                        )?;
+                                                    }
+                                                }
+                                                KeyCode::Backspace => {
+                                                    search_buf.pop();
+                                                    cur_idx = find_from(&search_buf, history.len());
+                                                    render_search(
+                                                        &prompt_prefix,
+                                                        &search_buf,
+                                                        cur_idx.map(|i| history[i].as_str()),
+                                                        false,
+                                                    )?;
+                                                }
+                                                KeyCode::Enter => {
+                                                    if is_input_incomplete(&input) {
+                                                        if input.trim_end().ends_with('\\') {
+                                                            let last_nl = input
+                                                                .rfind('\n')
+                                                                .map(|p| p + 1)
+                                                                .unwrap_or(0);
+                                                            let last_line = &input[last_nl..];
+                                                            let trimmed = last_line.trim_end();
+                                                            let mut bs_count = 0usize;
+                                                            for ch in trimmed.chars().rev() {
+                                                                if ch == '\\' {
+                                                                    bs_count += 1;
+                                                                } else {
+                                                                    break;
+                                                                }
+                                                            }
+                                                            if bs_count % 2 == 1 {
+                                                                let strip =
+                                                                    trimmed.len() - bs_count;
+                                                                input = format!(
+                                                                    "{}{}",
+                                                                    &input[..last_nl + strip],
+                                                                    &input
+                                                                        [last_nl + trimmed.len()..]
+                                                                );
+                                                            } else {
+                                                                input.push('\n');
+                                                            }
                                                         } else {
                                                             input.push('\n');
                                                         }
-                                                    } else {
-                                                        input.push('\n');
+                                                        cursor_pos = input.chars().count();
+                                                        let (ps2, from_env) = ps2_display();
+                                                        if from_env {
+                                                            eprint!("{}", ps2);
+                                                            let _ = io::stderr().flush();
+                                                        }
+                                                        rctx.prompt = Cow::Owned(PromptDisplay {
+                                                            lines_above: vec![],
+                                                            input_prefix: if from_env {
+                                                                String::new()
+                                                            } else {
+                                                                ps2
+                                                            },
+                                                            lines_below: vec![],
+                                                            right_prompt: String::new(),
+                                                            right_prompt_color: String::new(),
+                                                            right_prompt_hide_threshold: 0.0,
+                                                        });
+                                                        print!("\r\n");
+                                                        break;
                                                     }
-                                                     cursor_pos = input.chars().count();
-                                                    let (ps2, from_env) = ps2_display();
-                                                    if from_env {
-                                                        eprint!("{}", ps2);
-                                                        let _ = io::stderr().flush();
-                                                    }
-                                                    rctx.prompt = Cow::Owned(PromptDisplay {
-                                                        lines_above: vec![],
-                                                        input_prefix: if from_env { String::new() } else { ps2 },
-                                                        lines_below: vec![],
-                                                        right_prompt: String::new(),
-                                                        right_prompt_color: String::new(),
-                                                        right_prompt_hide_threshold: 0.0,
-                                                    });
                                                     print!("\r\n");
+                                                    return Ok(input);
+                                                }
+                                                KeyCode::Esc => {
+                                                    input = saved_input;
+                                                    cursor_pos = saved_cursor;
+                                                    rctx.prompt = Cow::Borrowed(prompt);
                                                     break;
                                                 }
-                                                print!("\r\n");
-                                                return Ok(input);
+                                                KeyCode::Char('g')
+                                                    if sm.contains(KeyModifiers::CONTROL) =>
+                                                {
+                                                    input = saved_input;
+                                                    cursor_pos = saved_cursor;
+                                                    rctx.prompt = Cow::Borrowed(prompt);
+                                                    break;
+                                                }
+                                                KeyCode::Char('c')
+                                                    if sm.contains(KeyModifiers::CONTROL) =>
+                                                {
+                                                    input = saved_input;
+                                                    cursor_pos = saved_cursor;
+                                                    rctx.prompt = Cow::Borrowed(prompt);
+                                                    print!("^C\r\n");
+                                                    break;
+                                                }
+                                                _ => {}
                                             }
-                                            KeyCode::Esc => {
-                                                input = saved_input;
-                                                cursor_pos = saved_cursor;
-                                                rctx.prompt = Cow::Borrowed(prompt);
-                                                break;
-                                            }
-                                            KeyCode::Char('g') if sm.contains(KeyModifiers::CONTROL) => {
-                                                input = saved_input;
-                                                cursor_pos = saved_cursor;
-                                                rctx.prompt = Cow::Borrowed(prompt);
-                                                break;
-                                            }
-                                            KeyCode::Char('c') if sm.contains(KeyModifiers::CONTROL) => {
-                                                input = saved_input;
-                                                cursor_pos = saved_cursor;
-                                                rctx.prompt = Cow::Borrowed(prompt);
-                                                print!("^C\r\n");
-                                                break;
-                                            }
-                                            _ => {}
                                         }
                                     }
-                                }
-                                redraw(&rctx, &input, cursor_pos, "")?;
-                            }
-                            KeyCode::Tab => {
-                                let completions = crate::shell::builtin::get_completions(&input, cursor_pos);
-                                if completions.len() == 1 {
-                                    let ws = find_word_start(&input, cursor_pos);
-                                    let byte_start = char_to_byte(&input, ws);
-                                    let byte_end = char_to_byte(&input, cursor_pos);
-                                    input.replace_range(byte_start..byte_end, &completions[0]);
-                                    cursor_pos = ws + completions[0].chars().count();
-                                    history_offset = None;
                                     redraw(&rctx, &input, cursor_pos, "")?;
-                                } else if completions.len() > 1 {
-                                    let common = tab_common_prefix(&completions);
-                                    if !common.is_empty() {
+                                }
+                                KeyCode::Tab => {
+                                    let completions =
+                                        crate::shell::builtin::get_completions(&input, cursor_pos);
+                                    if completions.len() == 1 {
                                         let ws = find_word_start(&input, cursor_pos);
                                         let byte_start = char_to_byte(&input, ws);
                                         let byte_end = char_to_byte(&input, cursor_pos);
-                                        input.replace_range(byte_start..byte_end, &common);
-                                        cursor_pos = ws + common.chars().count();
+                                        input.replace_range(byte_start..byte_end, &completions[0]);
+                                        cursor_pos = ws + completions[0].chars().count();
+                                        history_offset = None;
+                                        redraw(&rctx, &input, cursor_pos, "")?;
+                                    } else if completions.len() > 1 {
+                                        let common = tab_common_prefix(&completions);
+                                        if !common.is_empty() {
+                                            let ws = find_word_start(&input, cursor_pos);
+                                            let byte_start = char_to_byte(&input, ws);
+                                            let byte_end = char_to_byte(&input, cursor_pos);
+                                            input.replace_range(byte_start..byte_end, &common);
+                                            cursor_pos = ws + common.chars().count();
+                                        }
+                                        terminal_bell(&editor_cfg.bell);
+                                        history_offset = None;
+                                        redraw(&rctx, &input, cursor_pos, "")?;
+                                    } else {
+                                        terminal_bell(&editor_cfg.bell);
                                     }
-                                    terminal_bell(&editor_cfg.bell);
-                                    history_offset = None;
-                                    redraw(&rctx, &input, cursor_pos, "")?;
-                                } else {
-                                    terminal_bell(&editor_cfg.bell);
                                 }
-                            }
-                            KeyCode::Esc if mode == EditorMode::ViInsert => {
-                                mode = EditorMode::ViNormal;
-                                if cursor_pos > 0 && cursor_pos >= input.chars().count() {
-                                    cursor_pos = cursor_pos.saturating_sub(1);
+                                KeyCode::Esc if mode == EditorMode::ViInsert => {
+                                    mode = EditorMode::ViNormal;
+                                    if cursor_pos > 0 && cursor_pos >= input.chars().count() {
+                                        cursor_pos = cursor_pos.saturating_sub(1);
+                                    }
+                                    redraw(&rctx, &input, cursor_pos, &suggestion)?;
                                 }
-                                redraw(&rctx, &input, cursor_pos, &suggestion)?;
-                            }
-                            KeyCode::Up => {
-                                if history_offset.is_none() {
-                                    temp_buf = input.clone();
-                                    history_offset = Some(0);
-                                } else if let Some(ref mut idx) = history_offset
-                                    && *idx < history.len().saturating_sub(1) {
+                                KeyCode::Up => {
+                                    if history_offset.is_none() {
+                                        temp_buf = input.clone();
+                                        history_offset = Some(0);
+                                    } else if let Some(ref mut idx) = history_offset
+                                        && *idx < history.len().saturating_sub(1)
+                                    {
                                         *idx += 1;
                                     }
-                                if let Some(idx) = history_offset {
-                                    let hi = history.len().saturating_sub(1 + idx);
-                                    if hi < history.len() {
-                                        input = history[hi].clone();
-                                        cursor_pos = input.chars().count();
+                                    if let Some(idx) = history_offset {
+                                        let hi = history.len().saturating_sub(1 + idx);
+                                        if hi < history.len() {
+                                            input = history[hi].clone();
+                                            cursor_pos = input.chars().count();
+                                            redraw(&rctx, &input, cursor_pos, "")?;
+                                        }
+                                    }
+                                }
+                                KeyCode::Down => {
+                                    if let Some(idx) = history_offset {
+                                        if idx > 0 {
+                                            history_offset = Some(idx - 1);
+                                            let hi = history.len().saturating_sub(
+                                                1 + history_offset.expect("history_offset Some"),
+                                            );
+                                            input = history[hi].clone();
+                                            cursor_pos = input.chars().count();
+                                        } else {
+                                            history_offset = None;
+                                            input = temp_buf.clone();
+                                            cursor_pos = input.chars().count();
+                                        }
                                         redraw(&rctx, &input, cursor_pos, "")?;
                                     }
                                 }
-                            }
-                            KeyCode::Down => {
-                                if let Some(idx) = history_offset {
-                                    if idx > 0 {
-                                        history_offset = Some(idx - 1);
-                                        let hi = history.len().saturating_sub(1 + history_offset.expect("history_offset Some"));
-                                        input = history[hi].clone();
+                                KeyCode::Left => {
+                                    if cursor_pos > 0 {
+                                        cursor_pos = cursor_pos.saturating_sub(1);
+                                        redraw(&rctx, &input, cursor_pos, &suggestion)?;
+                                    }
+                                }
+                                KeyCode::Home => {
+                                    cursor_pos = 0;
+                                    redraw(&rctx, &input, cursor_pos, &suggestion)?;
+                                }
+                                KeyCode::End => {
+                                    if !suggestion.is_empty() && cursor_pos == input.chars().count()
+                                    {
+                                        input = format!("{}{}", input, suggestion);
                                         cursor_pos = input.chars().count();
+                                        redraw(&rctx, &input, cursor_pos, "")?;
                                     } else {
+                                        cursor_pos = input.chars().count();
+                                        redraw(&rctx, &input, cursor_pos, &suggestion)?;
+                                    }
+                                }
+                                KeyCode::Backspace => {
+                                    if cursor_pos > 0 {
+                                        let chars: Vec<char> = input.chars().collect();
+                                        let ch = chars[cursor_pos - 1];
+                                        let at_end = cursor_pos < chars.len();
+                                        let next_ch = if at_end {
+                                            Some(chars[cursor_pos])
+                                        } else {
+                                            None
+                                        };
+                                        if editor_cfg.auto_match_quotes
+                                            && ((ch == '"' && next_ch == Some('"'))
+                                                || (ch == '\'' && next_ch == Some('\'')))
+                                        {
+                                            cursor_pos -= 1;
+                                            remove_char_at(&mut input, cursor_pos);
+                                            remove_char_at(&mut input, cursor_pos);
+                                        } else {
+                                            cursor_pos -= 1;
+                                            remove_char_at(&mut input, cursor_pos);
+                                        }
                                         history_offset = None;
-                                        input = temp_buf.clone();
-                                        cursor_pos = input.chars().count();
+                                        redraw(&rctx, &input, cursor_pos, "")?;
                                     }
-                                    redraw(&rctx, &input, cursor_pos, "")?;
                                 }
-                            }
-                            KeyCode::Left => {
-                                if cursor_pos > 0 {
-                                    cursor_pos = cursor_pos.saturating_sub(1);
-                                    redraw(&rctx, &input, cursor_pos, &suggestion)?;
-                                }
-                            }
-                            KeyCode::Home => {
-                                cursor_pos = 0;
-                                redraw(&rctx, &input, cursor_pos, &suggestion)?;
-                            }
-                            KeyCode::End => {
-                                if !suggestion.is_empty() && cursor_pos == input.chars().count() {
-                                    input = format!("{}{}", input, suggestion);
-                                    cursor_pos = input.chars().count();
-                                    redraw(&rctx, &input, cursor_pos, "")?;
-                                } else {
-                                    cursor_pos = input.chars().count();
-                                    redraw(&rctx, &input, cursor_pos, &suggestion)?;
-                                }
-                            }
-                            KeyCode::Backspace => {
-                                if cursor_pos > 0 {
-                                    let chars: Vec<char> = input.chars().collect();
-                                    let ch = chars[cursor_pos - 1];
-                                    let at_end = cursor_pos < chars.len();
-                                    let next_ch = if at_end { Some(chars[cursor_pos]) } else { None };
-                                    if editor_cfg.auto_match_quotes && ((ch == '"' && next_ch == Some('"')) || (ch == '\'' && next_ch == Some('\''))) {
-                                        cursor_pos -= 1;
+                                KeyCode::Delete => {
+                                    if cursor_pos < input.chars().count() {
                                         remove_char_at(&mut input, cursor_pos);
-                                        remove_char_at(&mut input, cursor_pos);
+                                        history_offset = None;
+                                        redraw(&rctx, &input, cursor_pos, "")?;
+                                    }
+                                }
+                                KeyCode::Char(c) => {
+                                    if input.chars().count() >= editor_cfg.max_line_length as usize
+                                    {
+                                        terminal_bell(&editor_cfg.bell);
+                                        continue;
+                                    }
+                                    if overwrite_mode && cursor_pos < input.chars().count() {
+                                        push_undo(&input, cursor_pos);
+                                        let byte = char_to_byte(&input, cursor_pos);
+                                        input.remove(byte);
+                                        input.insert(byte, c);
+                                        cursor_pos += 1;
+                                    } else if editor_cfg.auto_match_quotes
+                                        && (c == '"' || c == '\'')
+                                    {
+                                        push_undo(&input, cursor_pos);
+                                        if input.chars().nth(cursor_pos) == Some(c) {
+                                            // Typing the closing quote skips over
+                                            // the auto-inserted matching quote.
+                                            cursor_pos += 1;
+                                        } else {
+                                            insert_char_at(&mut input, cursor_pos, c);
+                                            cursor_pos += 1;
+                                            insert_char_at(&mut input, cursor_pos, c);
+                                        }
                                     } else {
-                                        cursor_pos -= 1;
-                                        remove_char_at(&mut input, cursor_pos);
+                                        push_undo(&input, cursor_pos);
+                                        insert_char_at(&mut input, cursor_pos, c);
+                                        cursor_pos += 1;
                                     }
                                     history_offset = None;
                                     redraw(&rctx, &input, cursor_pos, "")?;
                                 }
-                            }
-                            KeyCode::Delete => {
-                                if cursor_pos < input.chars().count() {
-                                    remove_char_at(&mut input, cursor_pos);
-                                    history_offset = None;
-                                    redraw(&rctx, &input, cursor_pos, "")?;
-                                }
-                            }
-                            KeyCode::Char(c) => {
-                                if input.chars().count() >= editor_cfg.max_line_length as usize {
+                                _ => {
                                     terminal_bell(&editor_cfg.bell);
-                                    continue;
                                 }
-                                if overwrite_mode && cursor_pos < input.chars().count() {
-                                    push_undo(&input, cursor_pos);
-                                    let byte = char_to_byte(&input, cursor_pos);
-                                    input.remove(byte);
-                                    input.insert(byte, c);
-                                    cursor_pos += 1;
-                                } else if editor_cfg.auto_match_quotes && (c == '"' || c == '\'') {
-                                    push_undo(&input, cursor_pos);
-                                    if input.chars().nth(cursor_pos) == Some(c) {
-                                        // Typing the closing quote skips over
-                                        // the auto-inserted matching quote.
-                                        cursor_pos += 1;
-                                    } else {
-                                        insert_char_at(&mut input, cursor_pos, c);
-                                        cursor_pos += 1;
-                                        insert_char_at(&mut input, cursor_pos, c);
-                                    }
-                                } else {
-                                    push_undo(&input, cursor_pos);
-                                    insert_char_at(&mut input, cursor_pos, c);
-                                    cursor_pos += 1;
-                                }
-                                history_offset = None;
-                                redraw(&rctx, &input, cursor_pos, "")?;
                             }
-                            _ => {
-                                terminal_bell(&editor_cfg.bell);
-                            }
-                        }
                         } // end custom binding else
                     }
                 }
@@ -2153,7 +2704,12 @@ fn position_cursor(prefix: &str, input: &str, cursor_pos: usize, suggestion: &st
     }
 }
 
-fn render_display(context: &EditorRenderCtx, input: &str, cursor_pos: usize, suggestion: &str) -> io::Result<()> {
+fn render_display(
+    context: &EditorRenderCtx,
+    input: &str,
+    cursor_pos: usize,
+    suggestion: &str,
+) -> io::Result<()> {
     print!("\x1b[?25l");
     if context.prompt.lines_above.is_empty() {
         print!("\r\x1b[2K");
@@ -2162,7 +2718,10 @@ fn render_display(context: &EditorRenderCtx, input: &str, cursor_pos: usize, sug
         print!("{}\r\n", line);
     }
     print!("{}", context.prompt.input_prefix);
-    print!("{}", highlight_line(input, context.colorize, context.colors));
+    print!(
+        "{}",
+        highlight_line(input, context.colorize, context.colors)
+    );
     if !suggestion.is_empty() {
         let color = color_to_ansi(&context.autosuggest_cfg.highlight_color);
         print!("{}{}\x1b[0m", color, suggestion);
@@ -2183,7 +2742,12 @@ fn render_display(context: &EditorRenderCtx, input: &str, cursor_pos: usize, sug
             } else {
                 0
             };
-            print!("{}{}{}\x1b[0m", " ".repeat(padding), color_to_ansi(&context.prompt.right_prompt_color), context.prompt.right_prompt);
+            print!(
+                "{}{}{}\x1b[0m",
+                " ".repeat(padding),
+                color_to_ansi(&context.prompt.right_prompt_color),
+                context.prompt.right_prompt
+            );
         }
     }
 
@@ -2197,7 +2761,12 @@ fn render_display(context: &EditorRenderCtx, input: &str, cursor_pos: usize, sug
     io::stdout().flush()
 }
 
-fn redraw(context: &EditorRenderCtx, input: &str, cursor_pos: usize, suggestion: &str) -> io::Result<()> {
+fn redraw(
+    context: &EditorRenderCtx,
+    input: &str,
+    cursor_pos: usize,
+    suggestion: &str,
+) -> io::Result<()> {
     let above_count = context.prompt.lines_above.len();
     let below_count = context.prompt.lines_below.len();
 
@@ -2215,7 +2784,10 @@ fn redraw(context: &EditorRenderCtx, input: &str, cursor_pos: usize, suggestion:
     }
 
     print!("{}", context.prompt.input_prefix);
-    print!("{}", highlight_line(input, context.colorize, context.colors));
+    print!(
+        "{}",
+        highlight_line(input, context.colorize, context.colors)
+    );
     if !suggestion.is_empty() {
         let color = color_to_ansi(&context.autosuggest_cfg.highlight_color);
         print!("{}{}\x1b[0m", color, suggestion);
@@ -2236,7 +2808,12 @@ fn redraw(context: &EditorRenderCtx, input: &str, cursor_pos: usize, suggestion:
             } else {
                 0
             };
-            print!("{}{}{}\x1b[0m", " ".repeat(padding), color_to_ansi(&context.prompt.right_prompt_color), context.prompt.right_prompt);
+            print!(
+                "{}{}{}\x1b[0m",
+                " ".repeat(padding),
+                color_to_ansi(&context.prompt.right_prompt_color),
+                context.prompt.right_prompt
+            );
         }
     }
 
@@ -2292,7 +2869,12 @@ fn find_ci_char_pos(haystack: &[char], needle: &[char]) -> Option<usize> {
     None
 }
 
-fn find_suggestion(input: &str, history: &[String], case_sensitive: bool, substring: bool) -> String {
+fn find_suggestion(
+    input: &str,
+    history: &[String],
+    case_sensitive: bool,
+    substring: bool,
+) -> String {
     if input.is_empty() {
         return String::new();
     }
@@ -2305,7 +2887,10 @@ fn find_suggestion(input: &str, history: &[String], case_sensitive: bool, substr
         };
         if matches && entry != input {
             let char_count = input_lower.len();
-            return entry.char_indices().nth(char_count).map_or(String::new(), |(i, _)| entry[i..].to_string());
+            return entry
+                .char_indices()
+                .nth(char_count)
+                .map_or(String::new(), |(i, _)| entry[i..].to_string());
         }
     }
     if substring {
@@ -2320,7 +2905,11 @@ fn find_suggestion(input: &str, history: &[String], case_sensitive: bool, substr
             } else {
                 let entry_chars: Vec<char> = entry.chars().collect();
                 if let Some(char_pos) = find_ci_char_pos(&entry_chars, &input_lower) {
-                    let byte_pos = entry.char_indices().nth(char_pos).map(|(i, _)| i).unwrap_or(entry.len());
+                    let byte_pos = entry
+                        .char_indices()
+                        .nth(char_pos)
+                        .map(|(i, _)| i)
+                        .unwrap_or(entry.len());
                     return entry[byte_pos..].to_string();
                 }
             }

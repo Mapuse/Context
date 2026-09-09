@@ -2,21 +2,27 @@ pub mod config;
 pub mod shell;
 pub mod terminal;
 
-use std::io::{self, Write, BufRead, BufReader};
 use std::fs::OpenOptions;
-use std::sync::atomic::Ordering;
+use std::io::{self, BufRead, BufReader, Write};
 use std::sync::Arc;
+use std::sync::atomic::Ordering;
 
 use crate::config::Config;
 use crate::shell::env::Env;
 use crate::shell::signals;
-use crate::terminal::prompt;
 use crate::terminal::art;
-use crate::terminal::editor;
-use crate::terminal::raw::RawGuard;
 use crate::terminal::color::set_color_mode;
+use crate::terminal::editor;
+use crate::terminal::prompt;
+use crate::terminal::raw::RawGuard;
 
-fn cleanup(history_path: &std::path::Path, history: &[String], known_lines: usize, cfg: &Config, env: &mut Env) {
+fn cleanup(
+    history_path: &std::path::Path,
+    history: &[String],
+    known_lines: usize,
+    cfg: &Config,
+    env: &mut Env,
+) {
     env.unset_all_traps();
     if known_lines < history.len() {
         let new_entries = &history[known_lines..];
@@ -61,9 +67,7 @@ impl cps::Reporter for CtxReporter {
 fn main() {
     install_panic_hook();
 
-    cps::configure(
-        cps::Options::new("context").with_reporter(Arc::new(CtxReporter)),
-    );
+    cps::configure(cps::Options::new("context").with_reporter(Arc::new(CtxReporter)));
 
     let args: Vec<String> = std::env::args().collect();
     let opts = CliOptions::parse(&args);
@@ -87,7 +91,12 @@ fn main() {
     }
     if opts.verbose_version {
         let cfg = config::loader::load_with(opts.config_file.as_deref(), opts.no_config);
-        eprintln!("{} {} ({})", cfg.branding.app_name, cfg.branding.version, env!("CARGO_PKG_VERSION"));
+        eprintln!(
+            "{} {} ({})",
+            cfg.branding.app_name,
+            cfg.branding.version,
+            env!("CARGO_PKG_VERSION")
+        );
         eprintln!("Rust edition 2024, compiled for {}", std::env::consts::ARCH);
         eprintln!("POSIX-compliant shell with modern features");
         std::process::exit(0);
@@ -136,7 +145,10 @@ fn main() {
         match config::loader::save(&cfg) {
             Ok(()) => {
                 let path = config::loader::config_path();
-                eprintln!("ctx: dynamic (wallust) config written to {}", path.display());
+                eprintln!(
+                    "ctx: dynamic (wallust) config written to {}",
+                    path.display()
+                );
             }
             Err(e) => {
                 eprintln!("ctx: failed to write config: {}", e);
@@ -149,11 +161,16 @@ fn main() {
     // Apply -E/--env and -U/--unset before any execution mode so the
     // environment is already prepared when the shell starts.
     if let Some(ref kv) = opts.env_var
-        && let Some((k, v)) = kv.split_once('=') {
-            unsafe { std::env::set_var(k, v); }
+        && let Some((k, v)) = kv.split_once('=')
+    {
+        unsafe {
+            std::env::set_var(k, v);
         }
+    }
     if let Some(ref key) = opts.unset_var {
-        unsafe { std::env::remove_var(key); }
+        unsafe {
+            std::env::remove_var(key);
+        }
     }
 
     let mut command_to_run = opts.command.clone();
@@ -191,8 +208,12 @@ fn main() {
     if read_from_stdin {
         let mut cfg = config::loader::load_with(opts.config_file.as_deref(), opts.no_config);
         // Early CLI flags that must apply to non-interactive modes too.
-        if opts.xtrace { cfg.environment.set_defaults.push("_OPT_X=1".to_string()); }
-        if opts.bash_compat { cfg.execution.bash_compat = true; }
+        if opts.xtrace {
+            cfg.environment.set_defaults.push("_OPT_X=1".to_string());
+        }
+        if opts.bash_compat {
+            cfg.execution.bash_compat = true;
+        }
         set_color_mode(&cfg.display.color_mode);
         terminal::dynamic::apply(&mut cfg);
         let env = Env::new();
@@ -249,8 +270,12 @@ fn main() {
     if let Some(cmd) = command_to_run {
         let mut cfg = config::loader::load_with(opts.config_file.as_deref(), opts.no_config);
         // Early CLI flags that must apply to non-interactive modes too.
-        if opts.xtrace { cfg.environment.set_defaults.push("_OPT_X=1".to_string()); }
-        if opts.bash_compat { cfg.execution.bash_compat = true; }
+        if opts.xtrace {
+            cfg.environment.set_defaults.push("_OPT_X=1".to_string());
+        }
+        if opts.bash_compat {
+            cfg.execution.bash_compat = true;
+        }
         set_color_mode(&cfg.display.color_mode);
         terminal::dynamic::apply(&mut cfg);
         let env = Env::new();
@@ -272,7 +297,6 @@ fn main() {
     }
 
     let mut cfg = config::loader::load_with(opts.config_file.as_deref(), opts.no_config);
-
 
     if opts.no_color {
         cfg.display.color_mode = "0".into();
@@ -470,10 +494,16 @@ fn main() {
     executor.run_integrations();
 
     let mut py_engine = cps::PythonEngine::new(&cfg.python);
-    py_engine.plugins.fire("on_startup", &std::collections::HashMap::new());
+    py_engine
+        .plugins
+        .fire("on_startup", &std::collections::HashMap::new());
 
     if py_engine.plugins.count() > 0 {
-        eprintln!("ctx: loaded {} python plugin(s): {}", py_engine.plugins.count(), py_engine.plugins.names().join(", "));
+        eprintln!(
+            "ctx: loaded {} python plugin(s): {}",
+            py_engine.plugins.count(),
+            py_engine.plugins.names().join(", ")
+        );
     }
 
     if py_engine.tui_mode {
@@ -483,7 +513,9 @@ fn main() {
                     print!("{}", art::render_startup(&cfg, &executor.env));
                     let _ = io::stdout().flush();
                     if cfg.startup.startup_delay_ms > 0 {
-                        std::thread::sleep(std::time::Duration::from_millis(cfg.startup.startup_delay_ms as u64));
+                        std::thread::sleep(std::time::Duration::from_millis(
+                            cfg.startup.startup_delay_ms as u64,
+                        ));
                     }
                 }
                 let _ = io::stdout().flush();
@@ -491,7 +523,9 @@ fn main() {
                 print!("\x1b[?25h");
                 let _ = io::stdout().flush();
                 let tui_ok = theme.run();
-                py_engine.plugins.fire("on_exit", &std::collections::HashMap::new());
+                py_engine
+                    .plugins
+                    .fire("on_exit", &std::collections::HashMap::new());
                 py_engine.shutdown();
                 std::process::exit(if tui_ok { 0 } else { 1 });
             } else {
@@ -506,12 +540,18 @@ fn main() {
         print!("{}", art::render_startup(&cfg, &executor.env));
         let _ = io::stdout().flush();
         if cfg.startup.startup_delay_ms > 0 {
-            std::thread::sleep(std::time::Duration::from_millis(cfg.startup.startup_delay_ms as u64));
+            std::thread::sleep(std::time::Duration::from_millis(
+                cfg.startup.startup_delay_ms as u64,
+            ));
         }
     }
 
     let history_path = config::loader::history_path(&cfg);
-    let mut history = load_history_with_expiry(&history_path, cfg.history.expire_days, cfg.performance.max_history_load_lines);
+    let mut history = load_history_with_expiry(
+        &history_path,
+        cfg.history.expire_days,
+        cfg.performance.max_history_load_lines,
+    );
     let mut known_lines = history.len();
 
     let custom_keybindings = load_keybindings();
@@ -559,11 +599,12 @@ fn main() {
             };
             if !sig_name.is_empty()
                 && let Some(cmd) = executor.env.get_trap(sig_name).map(|s| s.to_string())
-                    && !cmd.is_empty() {
-                        let tokens = shell::lexer::tokenize(&cmd);
-                        let ast = shell::parser::parse(tokens);
-                        executor.execute(&ast);
-                    }
+                && !cmd.is_empty()
+            {
+                let tokens = shell::lexer::tokenize(&cmd);
+                let ast = shell::parser::parse(tokens);
+                executor.execute(&ast);
+            }
         }
 
         if signals::SHOULD_EXIT.load(Ordering::SeqCst) {
@@ -580,8 +621,14 @@ fn main() {
 
         if signals::RELOAD_CONFIG.load(Ordering::SeqCst) {
             signals::RELOAD_CONFIG.store(false, Ordering::SeqCst);
-            let sig1_cmd = signals::SIGUSR1_CUSTOM_CMD.lock().ok().and_then(|g| g.clone());
-            let sig2_cmd = signals::SIGUSR2_CUSTOM_CMD.lock().ok().and_then(|g| g.clone());
+            let sig1_cmd = signals::SIGUSR1_CUSTOM_CMD
+                .lock()
+                .ok()
+                .and_then(|g| g.clone());
+            let sig2_cmd = signals::SIGUSR2_CUSTOM_CMD
+                .lock()
+                .ok()
+                .and_then(|g| g.clone());
             if let Some(cmd) = sig1_cmd.or(sig2_cmd) {
                 if !cmd.is_empty() {
                     let tokens = shell::lexer::tokenize(&cmd);
@@ -599,11 +646,12 @@ fn main() {
         }
 
         if let Some(cmd) = executor.env.get("PROMPT_COMMAND").map(|s| s.to_string())
-            && !cmd.is_empty() {
-                let tokens = shell::lexer::tokenize(&cmd);
-                let ast = shell::parser::parse(tokens);
-                executor.execute(&ast);
-            }
+            && !cmd.is_empty()
+        {
+            let tokens = shell::lexer::tokenize(&cmd);
+            let ast = shell::parser::parse(tokens);
+            executor.execute(&ast);
+        }
 
         let mut prompt_display = if let Some(ref cache) = prompt_cache {
             cache.get_or_compute(&executor.env, &cfg, executor.last_status)
@@ -622,19 +670,39 @@ fn main() {
 
         if let Some(ref theme) = py_engine.theme {
             let mut context = std::collections::HashMap::new();
-            if let Some(v) = executor.env.get("PWD") { context.insert("cwd".into(), v.to_string()); }
-            if let Some(v) = executor.env.get("USER") { context.insert("user".into(), v.to_string()); }
-            if let Some(v) = executor.env.get("HOSTNAME") { context.insert("host".into(), v.to_string()); }
-            if let Some(v) = executor.env.get("GIT_BRANCH") { context.insert("git_branch".into(), v.to_string()); }
+            if let Some(v) = executor.env.get("PWD") {
+                context.insert("cwd".into(), v.to_string());
+            }
+            if let Some(v) = executor.env.get("USER") {
+                context.insert("user".into(), v.to_string());
+            }
+            if let Some(v) = executor.env.get("HOSTNAME") {
+                context.insert("host".into(), v.to_string());
+            }
+            if let Some(v) = executor.env.get("GIT_BRANCH") {
+                context.insert("git_branch".into(), v.to_string());
+            }
             context.insert("exit_code".into(), executor.last_status.to_string());
             context.insert("shell_version".into(), cfg.branding.version.clone());
             context.insert("shell_name".into(), cfg.branding.shell_name.clone());
-            context.insert("terminal_width".into(), crossterm::terminal::size().map(|(w, _)| w.to_string()).unwrap_or_default());
-            context.insert("terminal_height".into(), crossterm::terminal::size().map(|(_, h)| h.to_string()).unwrap_or_default());
+            context.insert(
+                "terminal_width".into(),
+                crossterm::terminal::size()
+                    .map(|(w, _)| w.to_string())
+                    .unwrap_or_default(),
+            );
+            context.insert(
+                "terminal_height".into(),
+                crossterm::terminal::size()
+                    .map(|(_, h)| h.to_string())
+                    .unwrap_or_default(),
+            );
             for (k, v) in executor.env.all_vars() {
                 context.insert(format!("env_{}", k), v.clone());
             }
-            let tw = crossterm::terminal::size().map(|(w, _)| w as usize).unwrap_or(80);
+            let tw = crossterm::terminal::size()
+                .map(|(w, _)| w as usize)
+                .unwrap_or(80);
             context.insert("width".into(), tw.to_string());
             let theme_result = theme.render_prompt(&context);
             if !theme_result.lines_above.is_empty() || !theme_result.input_prefix.is_empty() {
@@ -684,17 +752,21 @@ fn main() {
         }
         if cfg.display.show_session_info {
             let cwd = executor.env.get("PWD").unwrap_or("~");
-            let info = cfg.display.session_info_format.expand(&[
-                ("cwd", cwd),
-                ("version", &cfg.branding.version),
-            ]);
+            let info = cfg
+                .display
+                .session_info_format
+                .expand(&[("cwd", cwd), ("version", &cfg.branding.version)]);
             eprintln!("{}", info);
             let _ = io::stderr().flush();
         }
 
         if cfg.prompt.instant_prompt {
             let instant_path = config::loader::config_dir().join(".instant_prompt");
-            let prompt_text = format!("{}{}", prompt_display.lines_above.join("\n"), prompt_display.input_prefix);
+            let prompt_text = format!(
+                "{}{}",
+                prompt_display.lines_above.join("\n"),
+                prompt_display.input_prefix
+            );
             let _ = std::fs::write(&instant_path, &prompt_text);
         }
 
@@ -725,9 +797,15 @@ fn main() {
                 }
 
                 let dominated = !cfg.history.ignore_space || !line.starts_with(' ');
-                let dominated = dominated && !cfg.history.ignore_patterns.iter().any(|p| line.contains(p.as_str()));
+                let dominated = dominated
+                    && !cfg
+                        .history
+                        .ignore_patterns
+                        .iter()
+                        .any(|p| line.contains(p.as_str()));
                 if dominated {
-                    let dominated = !cfg.history.deduplicate || !history.last().map(|s| s == &line).unwrap_or(false);
+                    let dominated = !cfg.history.deduplicate
+                        || !history.last().map(|s| s == &line).unwrap_or(false);
                     if dominated {
                         history.push(line.clone());
                         let _ = append_history(&history_path, std::slice::from_ref(&line), &cfg);
@@ -748,19 +826,27 @@ fn main() {
                 py_engine.plugins.fire("on_preexec", &event_data);
                 let cmd_start = std::time::Instant::now();
                 if let Some(ps0) = executor.env.get("PS0").map(|s| s.to_string())
-                    && !ps0.is_empty() {
-                        let bg_pid = signals::BACKGROUND_PID.load(Ordering::SeqCst);
-                        let mut expander = shell::expand::Expander::new(&mut executor.env, executor.last_status, vec![], bg_pid);
-                        let expanded = expander.expand_word(&ps0);
-                        drop(expander);
-                        eprint!("{}", expanded);
-                        let _ = io::stderr().flush();
-                    }
+                    && !ps0.is_empty()
+                {
+                    let bg_pid = signals::BACKGROUND_PID.load(Ordering::SeqCst);
+                    let mut expander = shell::expand::Expander::new(
+                        &mut executor.env,
+                        executor.last_status,
+                        vec![],
+                        bg_pid,
+                    );
+                    let expanded = expander.expand_word(&ps0);
+                    drop(expander);
+                    eprint!("{}", expanded);
+                    let _ = io::stderr().flush();
+                }
                 let status = executor.execute(&ast);
                 let cmd_duration = cmd_start.elapsed();
 
                 if cfg.display.show_command_duration && cmd_duration.as_millis() > 0 {
-                    executor.env.set("_CMD_DURATION_MS", &cmd_duration.as_millis().to_string());
+                    executor
+                        .env
+                        .set("_CMD_DURATION_MS", &cmd_duration.as_millis().to_string());
                 }
 
                 if cfg.history.sync_on_command && cfg.history.share_across_sessions {
@@ -782,7 +868,9 @@ fn main() {
                 event_data.insert("duration_ms".into(), cmd_duration.as_millis().to_string());
                 py_engine.plugins.fire("on_postexec", &event_data);
 
-                py_engine.plugins.fire("on_precmd", &std::collections::HashMap::new());
+                py_engine
+                    .plugins
+                    .fire("on_precmd", &std::collections::HashMap::new());
 
                 if let Some(ref cache) = prompt_cache {
                     cache.invalidate();
@@ -801,21 +889,42 @@ fn main() {
                         context.insert("command".into(), cmd_str.to_string());
                         context.insert("exit_code".into(), status.to_string());
                         context.insert("duration_ms".into(), cmd_duration.as_millis().to_string());
-                        context.insert("cwd".into(), executor.env.get("PWD").unwrap_or("~").to_string());
+                        context.insert(
+                            "cwd".into(),
+                            executor.env.get("PWD").unwrap_or("~").to_string(),
+                        );
                         for (k, v) in executor.env.all_vars() {
                             context.insert(format!("env_{}", k), v.clone());
                         }
                         theme.render_command_summary(&context)
                     } else {
                         cfg.display.command_summary_format.expand(&[
-                            ("status_char", if status == 0 { &cfg.symbols.success_char } else if (147..=150).contains(&status) { &cfg.symbols.warning_char } else { &cfg.symbols.error_char }),
+                            (
+                                "status_char",
+                                if status == 0 {
+                                    &cfg.symbols.success_char
+                                } else if (147..=150).contains(&status) {
+                                    &cfg.symbols.warning_char
+                                } else {
+                                    &cfg.symbols.error_char
+                                },
+                            ),
                             ("command", cmd_str),
                             ("exit_code", &status.to_string()),
                             ("status", if status == 0 { "ok" } else { "error" }),
                         ])
                     };
-                    let color = if status == 0 { &cfg.colors.success } else { &cfg.colors.err };
-                    eprintln!("{}{}{}", crate::terminal::color::hex_to_ansi(color), summary, crate::terminal::color::reset());
+                    let color = if status == 0 {
+                        &cfg.colors.success
+                    } else {
+                        &cfg.colors.err
+                    };
+                    eprintln!(
+                        "{}{}{}",
+                        crate::terminal::color::hex_to_ansi(color),
+                        summary,
+                        crate::terminal::color::reset()
+                    );
                 }
 
                 if signals::SHOULD_EXIT.load(Ordering::SeqCst) {
@@ -829,17 +938,26 @@ fn main() {
         }
     }
 
-    py_engine.plugins.fire("on_exit", &std::collections::HashMap::new());
+    py_engine
+        .plugins
+        .fire("on_exit", &std::collections::HashMap::new());
     py_engine.shutdown();
     executor.run_exit_trap();
-    cleanup(&history_path, &history, known_lines, &cfg, &mut executor.env);
+    cleanup(
+        &history_path,
+        &history,
+        known_lines,
+        &cfg,
+        &mut executor.env,
+    );
 }
 
 fn load_history(path: &std::path::Path, max_lines: u32) -> Vec<String> {
     match OpenOptions::new().read(true).open(path) {
         Ok(file) => {
             let reader = BufReader::new(file);
-            let lines: Vec<String> = reader.lines()
+            let lines: Vec<String> = reader
+                .lines()
                 .map_while(Result::ok)
                 .filter(|l| !l.is_empty())
                 .collect();
@@ -854,20 +972,25 @@ fn load_history(path: &std::path::Path, max_lines: u32) -> Vec<String> {
     }
 }
 
-fn load_history_with_expiry(path: &std::path::Path, expire_days: u32, max_lines: u32) -> Vec<String> {
+fn load_history_with_expiry(
+    path: &std::path::Path,
+    expire_days: u32,
+    max_lines: u32,
+) -> Vec<String> {
     let mut entries = load_history(path, max_lines);
     if expire_days > 0
         && let Ok(meta) = std::fs::metadata(path)
-            && let Ok(modified) = meta.modified() {
-                let elapsed = modified.elapsed().unwrap_or_default();
-                let max_age = std::time::Duration::from_secs(expire_days as u64 * 86400);
-                if elapsed > max_age {
-                    let keep = entries.len() / 2;
-                    if keep > 0 {
-                        entries = entries[entries.len() - keep..].to_vec();
-                    }
-                }
+        && let Ok(modified) = meta.modified()
+    {
+        let elapsed = modified.elapsed().unwrap_or_default();
+        let max_age = std::time::Duration::from_secs(expire_days as u64 * 86400);
+        if elapsed > max_age {
+            let keep = entries.len() / 2;
+            if keep > 0 {
+                entries = entries[entries.len() - keep..].to_vec();
             }
+        }
+    }
     entries
 }
 
@@ -916,19 +1039,18 @@ fn sync_history(path: &std::path::Path, history: &mut Vec<String>, known_lines: 
         line_count += 1;
         if line_count > *known_lines
             && let Ok(entry) = line
-                && !entry.is_empty() && history.last().map(|s| s != &entry).unwrap_or(true) {
-                    history.push(entry);
-                }
+            && !entry.is_empty()
+            && history.last().map(|s| s != &entry).unwrap_or(true)
+        {
+            history.push(entry);
+        }
     }
     *known_lines = line_count;
 }
 
 fn append_history(path: &std::path::Path, history: &[String], _cfg: &Config) -> io::Result<()> {
     if let Some(entry) = history.last() {
-        let file = OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(path)?;
+        let file = OpenOptions::new().create(true).append(true).open(path)?;
 
         unsafe {
             libc::flock(file.as_raw_fd() as libc::c_int, libc::LOCK_EX);
@@ -954,11 +1076,12 @@ fn load_keybindings() -> std::collections::HashMap<String, String> {
     if let Ok(entries) = std::fs::read_dir(&bindings_dir) {
         for entry in entries.flatten() {
             if let Some(name) = entry.file_name().to_str()
-                && let Ok(widget) = std::fs::read_to_string(entry.path()) {
-                    let widget = widget.trim().to_string();
-                    let key = name.replace('_', " ");
-                    bindings.insert(key, widget);
-                }
+                && let Ok(widget) = std::fs::read_to_string(entry.path())
+            {
+                let widget = widget.trim().to_string();
+                let key = name.replace('_', " ");
+                bindings.insert(key, widget);
+            }
         }
     }
     bindings
@@ -1329,7 +1452,9 @@ fn print_help() {
     eprintln!("  -b, --bash               Enable bash compatibility");
     eprintln!();
     eprintln!("Startup:");
-    eprintln!("  -n, --norc                 Don't read the rc file (default: ~/.config/ctx/c.toml)");
+    eprintln!(
+        "  -n, --norc                 Don't read the rc file (default: ~/.config/ctx/c.toml)"
+    );
     eprintln!("  -N, --noprofile            Don't read profile or startup scripts");
     eprintln!("      --no-startup           Skip all startup scripts and run commands");
     eprintln!("      --no-welcome           Suppress the welcome message / ASCII art");

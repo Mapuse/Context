@@ -4,7 +4,11 @@ use std::sync::atomic::{AtomicU64, Ordering};
 static SHELL_START_TIME: AtomicU64 = AtomicU64::new(0);
 
 const INTERNAL_PREFIXES: &[&str] = &[
-    "_SHOPT_", "_GETOPT_", "_OPT_", "_LOADED_MODULE", "_SECONDS_RESET",
+    "_SHOPT_",
+    "_GETOPT_",
+    "_OPT_",
+    "_LOADED_MODULE",
+    "_SECONDS_RESET",
 ];
 
 fn is_internal(key: &str) -> bool {
@@ -31,7 +35,9 @@ fn is_valid_var_name(name: &str) -> bool {
         b'a'..=b'z' | b'A'..=b'Z' | b'_' => {}
         _ => return false,
     }
-    bytes[1..].iter().all(|b| matches!(b, b'a'..=b'z' | b'A'..=b'Z' | b'0'..=b'9' | b'_'))
+    bytes[1..]
+        .iter()
+        .all(|b| matches!(b, b'a'..=b'z' | b'A'..=b'Z' | b'0'..=b'9' | b'_'))
 }
 
 #[derive(Debug, Clone)]
@@ -56,25 +62,27 @@ impl Env {
             exported.insert(k.clone(), true);
             vars.insert(k, v);
         }
-        let shlvl: u32 = vars.get("SHLVL")
-            .and_then(|s| s.parse().ok())
-            .unwrap_or(0) + 1;
+        let shlvl: u32 = vars.get("SHLVL").and_then(|s| s.parse().ok()).unwrap_or(0) + 1;
         vars.insert("SHLVL".to_string(), shlvl.to_string());
-        unsafe { std::env::set_var("SHLVL", shlvl.to_string()); }
+        unsafe {
+            std::env::set_var("SHLVL", shlvl.to_string());
+        }
         if !vars.contains_key("SHELL") {
             vars.insert("SHELL".to_string(), "context".to_string());
         }
         // `$0` — the shell/invocation name, kept apart from the positionals.
         vars.entry("0".to_string())
-            .or_insert_with(|| {
-                std::env::args().next().unwrap_or_else(|| "ctx".to_string())
-            });
+            .or_insert_with(|| std::env::args().next().unwrap_or_else(|| "ctx".to_string()));
         let start = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap_or_default()
             .as_secs();
-        SHELL_START_TIME.compare_exchange(0, start, Ordering::SeqCst, Ordering::SeqCst).ok();
-        unsafe { libc::srand(start as u32); }
+        SHELL_START_TIME
+            .compare_exchange(0, start, Ordering::SeqCst, Ordering::SeqCst)
+            .ok();
+        unsafe {
+            libc::srand(start as u32);
+        }
         Self {
             vars,
             exported,
@@ -96,13 +104,18 @@ impl Env {
     fn get_resolved(&self, key: &str, depth: u8) -> Option<&str> {
         if depth < 32
             && let Some(attrs) = self.attrs.get(key)
-            && let Some(ref target) = attrs.nameref {
-                return self.get_resolved(target, depth + 1);
-            }
+            && let Some(ref target) = attrs.nameref
+        {
+            return self.get_resolved(target, depth + 1);
+        }
         match key {
-            "SHELL" => Some(self.vars.get("SHELL").map(|s| s.as_str()).unwrap_or("context")),
+            "SHELL" => Some(
+                self.vars
+                    .get("SHELL")
+                    .map(|s| s.as_str())
+                    .unwrap_or("context"),
+            ),
             _ => {
-
                 for scope in self.scope_stack.iter().rev() {
                     if let Some(val) = scope.get(key) {
                         return Some(val);
@@ -119,9 +132,10 @@ impl Env {
 
     fn set_resolved(&mut self, key: &str, value: &str, depth: u8) -> bool {
         if depth < 32
-            && let Some(target) = self.attrs.get(key).and_then(|a| a.nameref.clone()) {
-                return self.set_resolved(&target, value, depth + 1);
-            }
+            && let Some(target) = self.attrs.get(key).and_then(|a| a.nameref.clone())
+        {
+            return self.set_resolved(&target, value, depth + 1);
+        }
         let effective_value;
         let value = if let Some(attrs) = self.attrs.get(key) {
             if attrs.lowercase {
@@ -149,7 +163,10 @@ impl Env {
                 .unwrap_or_default()
                 .as_secs();
             let val: u64 = value.parse().unwrap_or(0);
-            self.vars.insert("_SECONDS_RESET".to_string(), (now.saturating_sub(val)).to_string());
+            self.vars.insert(
+                "_SECONDS_RESET".to_string(),
+                (now.saturating_sub(val)).to_string(),
+            );
         }
         if let Some(scope) = self.scope_stack.last_mut() {
             scope.insert(key.to_string(), value.to_string());
@@ -159,7 +176,9 @@ impl Env {
         // Only exported variables are visible to child processes; plain
         // shell variables must stay local.
         if !is_internal(key) && self.is_exported(key) {
-            unsafe { std::env::set_var(key, value); }
+            unsafe {
+                std::env::set_var(key, value);
+            }
         }
         true
     }
@@ -179,7 +198,9 @@ impl Env {
             key.push_str("DIRSTACK_");
             key.push_str(&i.to_string());
             if self.vars.remove(&key).is_some() {
-                unsafe { std::env::remove_var(&key); }
+                unsafe {
+                    std::env::remove_var(&key);
+                }
             } else {
                 break;
             }
@@ -191,22 +212,29 @@ impl Env {
         self.vars.insert(key.to_string(), value.to_string());
         self.exported.insert(key.to_string(), export);
         if !is_internal(key) && export {
-            unsafe { std::env::set_var(key, value); }
+            unsafe {
+                std::env::set_var(key, value);
+            }
         }
     }
 
     pub fn export(&mut self, key: &str) {
         self.exported.insert(key.to_string(), true);
         if !is_internal(key)
-            && let Some(val) = self.vars.get(key).cloned() {
-                unsafe { std::env::set_var(key, &val); }
+            && let Some(val) = self.vars.get(key).cloned()
+        {
+            unsafe {
+                std::env::set_var(key, &val);
             }
+        }
     }
 
     pub fn unexport(&mut self, key: &str) {
         self.exported.insert(key.to_string(), false);
         if !is_internal(key) {
-            unsafe { std::env::remove_var(key); }
+            unsafe {
+                std::env::remove_var(key);
+            }
         }
     }
 
@@ -231,7 +259,9 @@ impl Env {
         self.vars.remove(key);
         self.exported.remove(key);
         if !is_internal(key) {
-            unsafe { std::env::remove_var(key); }
+            unsafe {
+                std::env::remove_var(key);
+            }
         }
     }
 
@@ -247,8 +277,7 @@ impl Env {
                 && k.starts_with(prefix.as_str())
                 && k[prefix.len()..].bytes().all(|b| b.is_ascii_digit())
         };
-        self.vars.keys().any(&is_elem)
-            || self.scope_stack.iter().any(|s| s.keys().any(&is_elem))
+        self.vars.keys().any(&is_elem) || self.scope_stack.iter().any(|s| s.keys().any(&is_elem))
     }
 
     /// Remove every `{name}_N` element, the assoc-array table and the base
@@ -260,10 +289,7 @@ impl Env {
                 && k.starts_with(prefix.as_str())
                 && k[prefix.len()..].bytes().all(|b| b.is_ascii_digit())
         };
-        let removed: Vec<String> = self.vars.keys()
-            .filter(|k| is_elem(k))
-            .cloned()
-            .collect();
+        let removed: Vec<String> = self.vars.keys().filter(|k| is_elem(k)).cloned().collect();
         self.vars.retain(|k, _| !is_elem(k));
         self.vars.remove(name);
         self.exported.remove(name);
@@ -274,7 +300,9 @@ impl Env {
         self.assoc_arrays.remove(name);
         for k in removed {
             if !is_internal(&k) {
-                unsafe { std::env::remove_var(&k); }
+                unsafe {
+                    std::env::remove_var(&k);
+                }
             }
         }
     }
@@ -308,16 +336,24 @@ impl Env {
                 .unwrap_or_else(|| "/".into()),
             "USER" => self.get("USER").unwrap_or("user").to_string(),
             "HOSTNAME" => self.get_hostname(),
-            "SHLVL" => self.vars.get("SHLVL").cloned().unwrap_or_else(|| "1".into()),
+            "SHLVL" => self
+                .vars
+                .get("SHLVL")
+                .cloned()
+                .unwrap_or_else(|| "1".into()),
             "RANDOM" => unsafe { libc::rand() % 32768 }.to_string(),
-            "LINENO" => crate::shell::expand::CURRENT_LINE.load(Ordering::Relaxed).to_string(),
+            "LINENO" => crate::shell::expand::CURRENT_LINE
+                .load(Ordering::Relaxed)
+                .to_string(),
             "SECONDS" => {
                 if self.vars.contains_key("_SECONDS_RESET") {
                     let now = std::time::SystemTime::now()
                         .duration_since(std::time::UNIX_EPOCH)
                         .unwrap_or_default()
                         .as_secs();
-                    let reset = self.vars.get("_SECONDS_RESET")
+                    let reset = self
+                        .vars
+                        .get("_SECONDS_RESET")
                         .and_then(|s| s.parse::<u64>().ok())
                         .unwrap_or(0);
                     (now.saturating_sub(reset)).to_string()
@@ -346,20 +382,23 @@ impl Env {
             "COPROC_PID" => self.get("COPROC_PID").unwrap_or("0").to_string(),
             "COPROC" => self.get("COPROC").unwrap_or("").to_string(),
             "BASH_ALIASES" => {
-                let pairs: Vec<String> = self.aliases.iter()
+                let pairs: Vec<String> = self
+                    .aliases
+                    .iter()
                     .map(|(k, v)| format!("{}={}", k, v))
                     .collect();
                 pairs.join(" ")
             }
             "BASH_CMDS" => {
                 let cache = crate::shell::builtin::PATH_CACHE.lock().unwrap();
-                let pairs: Vec<String> = cache.iter()
-                    .map(|(k, v)| format!("{}={}", k, v))
-                    .collect();
+                let pairs: Vec<String> =
+                    cache.iter().map(|(k, v)| format!("{}={}", k, v)).collect();
                 pairs.join(" ")
             }
             var if var.starts_with("BASH_REMATCH[") => {
-                let idx_str = var.trim_start_matches("BASH_REMATCH[").trim_end_matches(']');
+                let idx_str = var
+                    .trim_start_matches("BASH_REMATCH[")
+                    .trim_end_matches(']');
                 let rematch = crate::shell::executor::BASH_REMATCH.lock().unwrap();
                 if idx_str == "@" {
                     rematch.join(" ")
@@ -426,7 +465,8 @@ impl Env {
     }
 
     pub fn set_trap(&mut self, signal: &str, command: &str) {
-        self.traps.insert(signal.to_uppercase(), command.to_string());
+        self.traps
+            .insert(signal.to_uppercase(), command.to_string());
     }
 
     pub fn get_trap(&self, signal: &str) -> Option<&str> {
@@ -450,13 +490,24 @@ impl Env {
     }
 
     pub fn local_vars(&self) -> Vec<(&str, &str)> {
-        self.scope_stack.last()
-            .map(|scope| scope.iter().map(|(k, v)| (k.as_str(), v.as_str())).collect())
+        self.scope_stack
+            .last()
+            .map(|scope| {
+                scope
+                    .iter()
+                    .map(|(k, v)| (k.as_str(), v.as_str()))
+                    .collect()
+            })
             .unwrap_or_default()
     }
 
-    pub fn passthrough_env(&self, passthrough: &[String], filter: &[String]) -> Vec<(String, String)> {
-        self.vars.iter()
+    pub fn passthrough_env(
+        &self,
+        passthrough: &[String],
+        filter: &[String],
+    ) -> Vec<(String, String)> {
+        self.vars
+            .iter()
             .filter(|(k, _)| {
                 if filter.iter().any(|f| f == k.as_str()) {
                     return false;
@@ -464,7 +515,8 @@ impl Env {
                 if passthrough.is_empty() {
                     return self.exported.get(k.as_str()).copied().unwrap_or(false);
                 }
-                passthrough.iter().any(|p| p == k.as_str()) || self.exported.get(k.as_str()).copied().unwrap_or(false)
+                passthrough.iter().any(|p| p == k.as_str())
+                    || self.exported.get(k.as_str()).copied().unwrap_or(false)
             })
             .map(|(k, v)| (k.clone(), v.clone()))
             .collect()
@@ -530,19 +582,22 @@ impl Env {
     }
 
     pub fn assoc_keys(&self, name: &str) -> Vec<String> {
-        self.assoc_arrays.get(name)
+        self.assoc_arrays
+            .get(name)
             .map(|m| m.keys().cloned().collect())
             .unwrap_or_default()
     }
 
     pub fn assoc_values(&self, name: &str) -> Vec<String> {
-        self.assoc_arrays.get(name)
+        self.assoc_arrays
+            .get(name)
             .map(|m| m.values().cloned().collect())
             .unwrap_or_default()
     }
 
     pub fn assoc_pairs(&self, name: &str) -> Vec<(String, String)> {
-        self.assoc_arrays.get(name)
+        self.assoc_arrays
+            .get(name)
             .map(|m| m.iter().map(|(k, v)| (k.clone(), v.clone())).collect())
             .unwrap_or_default()
     }
@@ -559,7 +614,9 @@ impl Env {
     }
 
     pub fn indexed_array_get(&self, name: &str, key: &str) -> Option<&str> {
-        self.vars.get(&format!("{}_{}", name, key)).map(|s| s.as_str())
+        self.vars
+            .get(&format!("{}_{}", name, key))
+            .map(|s| s.as_str())
     }
 
     /// All consecutive elements of an indexed array (`{name}_0`, `{name}_1`,
@@ -631,7 +688,9 @@ impl Env {
         }
         self.vars.insert(key.to_string(), value.to_string());
         if !is_internal(key) && self.is_exported(key) {
-            unsafe { std::env::set_var(key, value); }
+            unsafe {
+                std::env::set_var(key, value);
+            }
         }
     }
 
@@ -644,7 +703,9 @@ impl Env {
     }
 
     pub fn clear_inherited(&mut self, keep_keys: &[String]) {
-        let inherited_keys: Vec<String> = self.vars.keys()
+        let inherited_keys: Vec<String> = self
+            .vars
+            .keys()
             .filter(|k| !keep_keys.iter().any(|kk| kk == k.as_str()))
             .cloned()
             .collect();
@@ -652,7 +713,9 @@ impl Env {
             self.vars.remove(&key);
             self.exported.remove(&key);
             if !is_internal(&key) {
-                unsafe { std::env::remove_var(&key); }
+                unsafe {
+                    std::env::remove_var(&key);
+                }
             }
         }
     }
@@ -673,9 +736,31 @@ mod tests {
         let mut env = Env::new();
         env.set("target", "hello");
         env.set("ref1", "target");
-        env.set_var_attrs("ref1", VarAttrs { readonly: false, exported: false, integer: false, lowercase: false, uppercase: false, nameref: Some("target".into()), trace: false });
+        env.set_var_attrs(
+            "ref1",
+            VarAttrs {
+                readonly: false,
+                exported: false,
+                integer: false,
+                lowercase: false,
+                uppercase: false,
+                nameref: Some("target".into()),
+                trace: false,
+            },
+        );
         env.set("ref2", "ref1");
-        env.set_var_attrs("ref2", VarAttrs { readonly: false, exported: false, integer: false, lowercase: false, uppercase: false, nameref: Some("ref1".into()), trace: false });
+        env.set_var_attrs(
+            "ref2",
+            VarAttrs {
+                readonly: false,
+                exported: false,
+                integer: false,
+                lowercase: false,
+                uppercase: false,
+                nameref: Some("ref1".into()),
+                trace: false,
+            },
+        );
         assert_eq!(env.get("ref2"), Some("hello"));
     }
 

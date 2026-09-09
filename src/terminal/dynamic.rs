@@ -5,9 +5,10 @@ use std::process::Command;
 
 fn expand_tilde(path: &str) -> String {
     if path.starts_with('~')
-        && let Some(home) = dirs::home_dir() {
-            return path.replacen('~', &home.to_string_lossy(), 1);
-        }
+        && let Some(home) = dirs::home_dir()
+    {
+        return path.replacen('~', &home.to_string_lossy(), 1);
+    }
     path.to_string()
 }
 
@@ -30,12 +31,16 @@ fn detect_wallpaper_path() -> Option<String> {
 
     if let Ok(o) = Command::new("swaymsg").args(["-t", "get_outputs"]).output()
         && let Ok(v) = serde_json::from_slice::<serde_json::Value>(&o.stdout)
-            && let Some(path) = v.get(0).and_then(|o| o.get("current_wallpaper")).and_then(|v| v.as_str()) {
-                let path = expand_tilde(path);
-                if std::path::Path::new(&path).exists() {
-                    return Some(path);
-                }
-            }
+        && let Some(path) = v
+            .get(0)
+            .and_then(|o| o.get("current_wallpaper"))
+            .and_then(|v| v.as_str())
+    {
+        let path = expand_tilde(path);
+        if std::path::Path::new(&path).exists() {
+            return Some(path);
+        }
+    }
 
     for key in &["picture-uri-dark", "picture-uri"] {
         if let Ok(o) = Command::new("gsettings")
@@ -43,10 +48,7 @@ fn detect_wallpaper_path() -> Option<String> {
             .output()
         {
             let s = String::from_utf8_lossy(&o.stdout).to_string();
-            let path = s
-                .trim()
-                .trim_start_matches("file://")
-                .trim_matches('\'');
+            let path = s.trim().trim_start_matches("file://").trim_matches('\'');
             let path = expand_tilde(path);
             if std::path::Path::new(&path).exists() {
                 return Some(path);
@@ -85,8 +87,8 @@ fn extract_colors_via_wallust(path: &str) -> Option<Vec<String>> {
 
     let wallust_cfg = wallust::config::Config::default();
 
-    let colors = wallust::gen_colors(file, &wallust_cfg, false, &cache_path, true, true, false)
-        .ok()?;
+    let colors =
+        wallust::gen_colors(file, &wallust_cfg, false, &cache_path, true, true, false).ok()?;
 
     let bg = myrgb_to_hex(&colors.background);
     let fg = myrgb_to_hex(&colors.foreground);
@@ -97,7 +99,17 @@ fn extract_colors_via_wallust(path: &str) -> Option<Vec<String>> {
     let info = myrgb_to_hex(&colors.color4);
     let dim = darken(&fg, 0.5);
 
-    Some(vec![bg, fg.clone(), accent, fg, success, err, warning, info, dim])
+    Some(vec![
+        bg,
+        fg.clone(),
+        accent,
+        fg,
+        success,
+        err,
+        warning,
+        info,
+        dim,
+    ])
 }
 
 fn query_terminal_bg() -> Vec<String> {
@@ -114,16 +126,17 @@ fn query_terminal_bg() -> Vec<String> {
     let start = std::time::Instant::now();
     while start.elapsed() < Duration::from_millis(100) {
         if let Ok(n) = handle.read(&mut buf)
-            && n > 0 {
-                let s = String::from_utf8_lossy(&buf[..n]);
-                if let Some(idx) = s.find("\x1b]11;") {
-                    let rest = &s[idx + 5..];
-                    if let Some(end) = rest.find('\x07') {
-                        let color_str = &rest[..end];
-                        return parse_osc_color(color_str);
-                    }
+            && n > 0
+        {
+            let s = String::from_utf8_lossy(&buf[..n]);
+            if let Some(idx) = s.find("\x1b]11;") {
+                let rest = &s[idx + 5..];
+                if let Some(end) = rest.find('\x07') {
+                    let color_str = &rest[..end];
+                    return parse_osc_color(color_str);
                 }
             }
+        }
     }
 
     fallback_palette()
@@ -229,7 +242,10 @@ pub fn apply(cfg: &mut Config) {
 
     let mapping = &cfg.dynamic.color_mapping;
     let apply = |field: &str, idx: usize| -> String {
-        mapping.get(field).cloned().unwrap_or_else(|| colors[idx].clone())
+        mapping
+            .get(field)
+            .cloned()
+            .unwrap_or_else(|| colors[idx].clone())
     };
 
     cfg.colors.bg_primary = apply("bg_primary", 0);
@@ -242,10 +258,26 @@ pub fn apply(cfg: &mut Config) {
     cfg.colors.info = apply("info", 7);
     cfg.colors.dim = apply("dim", 8);
 
-    let err_base = if cfg.colors.err.len() >= 7 { cfg.colors.err[1..5].to_string() } else { "aaff".into() };
-    let success_base = if cfg.colors.success.len() >= 7 { cfg.colors.success[1..5].to_string() } else { "aaff".into() };
-    let warning_base = if cfg.colors.warning.len() >= 7 { cfg.colors.warning[1..5].to_string() } else { "aaff".into() };
-    let info_base = if cfg.colors.info.len() >= 7 { cfg.colors.info[1..5].to_string() } else { "aaff".into() };
+    let err_base = if cfg.colors.err.len() >= 7 {
+        cfg.colors.err[1..5].to_string()
+    } else {
+        "aaff".into()
+    };
+    let success_base = if cfg.colors.success.len() >= 7 {
+        cfg.colors.success[1..5].to_string()
+    } else {
+        "aaff".into()
+    };
+    let warning_base = if cfg.colors.warning.len() >= 7 {
+        cfg.colors.warning[1..5].to_string()
+    } else {
+        "aaff".into()
+    };
+    let info_base = if cfg.colors.info.len() >= 7 {
+        cfg.colors.info[1..5].to_string()
+    } else {
+        "aaff".into()
+    };
 
     cfg.colors.bg_err = format!("#{}00", err_base);
     cfg.colors.bg_success = format!("#{}00", success_base);

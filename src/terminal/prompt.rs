@@ -1,11 +1,11 @@
+use super::color::*;
 use crate::config::Config;
 use crate::shell::env::Env;
-use super::color::*;
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::sync::{Arc, Mutex, OnceLock};
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::time::{Instant, Duration};
+use std::sync::{Arc, Mutex, OnceLock};
+use std::time::{Duration, Instant};
 
 pub static COMMAND_COUNT: AtomicUsize = AtomicUsize::new(0);
 static HIST_COUNT: AtomicUsize = AtomicUsize::new(0);
@@ -130,7 +130,12 @@ pub fn render_prompt(env: &Env, cfg: &Config, last_status: i32) -> PromptDisplay
     }
 
     if !compact && cfg.display.title_bar {
-        let title = expand_prompt_vars(&cfg.display.title_bar_format.single(), env, cfg, last_status);
+        let title = expand_prompt_vars(
+            &cfg.display.title_bar_format.single(),
+            env,
+            cfg,
+            last_status,
+        );
         let width = get_terminal_width();
         let separator_line = "─".repeat(width);
         let separator = adapt_symbol(&separator_line, effective_symbol_mode(cfg));
@@ -144,7 +149,12 @@ pub fn render_prompt(env: &Env, cfg: &Config, last_status: i32) -> PromptDisplay
     }
 
     if !compact && cfg.display.show_session_info {
-        let info = expand_prompt_vars(&cfg.display.session_info_format.single(), env, cfg, last_status);
+        let info = expand_prompt_vars(
+            &cfg.display.session_info_format.single(),
+            env,
+            cfg,
+            last_status,
+        );
         let color = hex_to_ansi(&cfg.colors.info);
         header.push_str(&format!("{}{}{}\n", color, info, reset()));
     }
@@ -179,7 +189,12 @@ pub fn render_prompt(env: &Env, cfg: &Config, last_status: i32) -> PromptDisplay
         prompt_line.push_str(&render_symbol_line(env, cfg, last_status));
         prompt_line.push(' ');
         if cfg.display.status_line {
-            let status = expand_prompt_vars(&cfg.display.status_line_format.single(), env, cfg, last_status);
+            let status = expand_prompt_vars(
+                &cfg.display.status_line_format.single(),
+                env,
+                cfg,
+                last_status,
+            );
             let info_color = hex_to_ansi(&cfg.colors.info);
             prompt_line.push('\n');
             prompt_line.push_str(&format!("{}{}{}", info_color, status, reset()));
@@ -194,10 +209,19 @@ pub fn render_prompt(env: &Env, cfg: &Config, last_status: i32) -> PromptDisplay
             let colored = if cfg.colors.rprompt_bg.is_empty() {
                 raw
             } else {
-                format!("{}{}{}", hex_to_ansi_bg(&cfg.colors.rprompt_bg), raw, reset())
+                format!(
+                    "{}{}{}",
+                    hex_to_ansi_bg(&cfg.colors.rprompt_bg),
+                    raw,
+                    reset()
+                )
             };
             if !cfg.prompt.rprompt_eol_escape.is_empty() {
-                format!("{}{}", colored, interpret_escapes(&cfg.prompt.rprompt_eol_escape))
+                format!(
+                    "{}{}",
+                    colored,
+                    interpret_escapes(&cfg.prompt.rprompt_eol_escape)
+                )
             } else {
                 colored
             }
@@ -239,7 +263,10 @@ fn render_format_prompt(env: &Env, cfg: &Config, last_status: i32, header: &str)
     let input_line_idx = if cfg.cursor.format_input_line < 0 {
         num_lines as i32 - 1
     } else {
-        cfg.cursor.format_input_line.min(num_lines as i32 - 1).max(0)
+        cfg.cursor
+            .format_input_line
+            .min(num_lines as i32 - 1)
+            .max(0)
     } as usize;
 
     let cwd = env.get("PWD").unwrap_or("~").to_string();
@@ -266,7 +293,8 @@ fn render_format_prompt(env: &Env, cfg: &Config, last_status: i32, header: &str)
         let mut full_line = String::new();
 
         if i == 0 && header.is_empty() {
-            full_line.push_str(&format!("{}{}{}{}",
+            full_line.push_str(&format!(
+                "{}{}{}{}",
                 bold(),
                 hex_to_ansi(&cfg.prompt.color_cwd),
                 cwd_short,
@@ -304,7 +332,12 @@ fn render_format_prompt(env: &Env, cfg: &Config, last_status: i32, header: &str)
     }
 
     if cfg.display.status_line {
-        let status = expand_prompt_vars(&cfg.display.status_line_format.single(), env, cfg, last_status);
+        let status = expand_prompt_vars(
+            &cfg.display.status_line_format.single(),
+            env,
+            cfg,
+            last_status,
+        );
         let info_color = hex_to_ansi(&cfg.colors.info);
         lines_below.push(format!("{}{}{}", info_color, status, reset()));
     }
@@ -321,7 +354,11 @@ fn render_format_prompt(env: &Env, cfg: &Config, last_status: i32, header: &str)
     } else {
         let raw = expand_prompt_vars(&cfg.prompt.right_prompt.single(), env, cfg, last_status);
         if !cfg.prompt.rprompt_eol_escape.is_empty() {
-            format!("{}{}", raw, interpret_escapes(&cfg.prompt.rprompt_eol_escape))
+            format!(
+                "{}{}",
+                raw,
+                interpret_escapes(&cfg.prompt.rprompt_eol_escape)
+            )
         } else {
             raw
         }
@@ -352,7 +389,12 @@ fn render_symbol_line(env: &Env, cfg: &Config, last_status: i32) -> String {
 
     if !prefix.is_empty() {
         let adapted_prefix = adapt_symbol(&prefix, effective_symbol_mode(cfg));
-        line.push_str(&format!("{}{}{}", hex_to_ansi(&cfg.prompt.color_prompt), adapted_prefix, reset()));
+        line.push_str(&format!(
+            "{}{}{}",
+            hex_to_ansi(&cfg.prompt.color_prompt),
+            adapted_prefix,
+            reset()
+        ));
         line.push(' ');
     }
 
@@ -360,19 +402,39 @@ fn render_symbol_line(env: &Env, cfg: &Config, last_status: i32) -> String {
         let segments: Vec<&str> = cwd_short.split('/').filter(|s| !s.is_empty()).collect();
         let num_segments = segments.len().max(1);
         for (i, seg) in segments.iter().enumerate() {
-            let t = if num_segments <= 1 { 0.0 } else { i as f64 / (num_segments - 1) as f64 };
-            let color = if cfg.colors.cwd_gradient_start.is_empty() || cfg.colors.cwd_gradient_end.is_empty() {
+            let t = if num_segments <= 1 {
+                0.0
+            } else {
+                i as f64 / (num_segments - 1) as f64
+            };
+            let color = if cfg.colors.cwd_gradient_start.is_empty()
+                || cfg.colors.cwd_gradient_end.is_empty()
+            {
                 if cfg.colors.gradient_start.is_empty() || cfg.colors.gradient_end.is_empty() {
                     hex_to_ansi(&cfg.prompt.color_cwd)
                 } else if cfg.colors.gradient_mid.is_empty() {
                     gradient_color(&cfg.colors.gradient_start, &cfg.colors.gradient_end, t)
                 } else {
-                    gradient_color_3(&cfg.colors.gradient_start, &cfg.colors.gradient_mid, &cfg.colors.gradient_end, t)
+                    gradient_color_3(
+                        &cfg.colors.gradient_start,
+                        &cfg.colors.gradient_mid,
+                        &cfg.colors.gradient_end,
+                        t,
+                    )
                 }
             } else if cfg.colors.gradient_mid.is_empty() {
-                gradient_color(&cfg.colors.cwd_gradient_start, &cfg.colors.cwd_gradient_end, t)
+                gradient_color(
+                    &cfg.colors.cwd_gradient_start,
+                    &cfg.colors.cwd_gradient_end,
+                    t,
+                )
             } else {
-                gradient_color_3(&cfg.colors.cwd_gradient_start, &cfg.colors.gradient_mid, &cfg.colors.cwd_gradient_end, t)
+                gradient_color_3(
+                    &cfg.colors.cwd_gradient_start,
+                    &cfg.colors.gradient_mid,
+                    &cfg.colors.cwd_gradient_end,
+                    t,
+                )
             };
             line.push_str(&color);
             line.push_str(bold());
@@ -389,7 +451,11 @@ fn render_symbol_line(env: &Env, cfg: &Config, last_status: i32) -> String {
                 } else {
                     "/".to_string()
                 };
-                line.push_str(&format!("{}{}", hex_to_ansi(&cfg.prompt.color_cwd), path_sep));
+                line.push_str(&format!(
+                    "{}{}",
+                    hex_to_ansi(&cfg.prompt.color_cwd),
+                    path_sep
+                ));
             }
         }
         if segments.is_empty() {
@@ -400,7 +466,12 @@ fn render_symbol_line(env: &Env, cfg: &Config, last_status: i32) -> String {
     if !suffix.is_empty() {
         let adapted_suffix = adapt_symbol(&suffix, effective_symbol_mode(cfg));
         line.push(' ');
-        line.push_str(&format!("{}{}{}", hex_to_ansi(&cfg.prompt.color_cwd), adapted_suffix, reset()));
+        line.push_str(&format!(
+            "{}{}{}",
+            hex_to_ansi(&cfg.prompt.color_cwd),
+            adapted_suffix,
+            reset()
+        ));
     }
 
     line
@@ -410,7 +481,11 @@ fn render_top_line(env: &Env, cfg: &Config) -> String {
     let left = expand_prompt_vars(&cfg.prompt.top_line_left.single(), env, cfg, 0);
     let right = expand_prompt_vars(&cfg.prompt.top_line_right.single(), env, cfg, 0);
     let border = resolve_border_chars(cfg);
-    let title_color = if cfg.box_config.title_color.is_empty() { &cfg.prompt.color_top } else { &cfg.box_config.title_color };
+    let title_color = if cfg.box_config.title_color.is_empty() {
+        &cfg.prompt.color_top
+    } else {
+        &cfg.box_config.title_color
+    };
 
     let term_width = get_terminal_width();
     let left_vis = visible_len(&left);
@@ -465,7 +540,9 @@ fn render_middle(env: &Env, cfg: &Config) -> String {
     // Colorize through the placeholders BEFORE any other expansion so that
     // dynamic values which merely contain the username as a substring are
     // never recolored.
-    let pre_colored = cfg.prompt.user_host_format
+    let pre_colored = cfg
+        .prompt
+        .user_host_format
         .replace("{user}", &format!("{}{}{}", user_color, user, reset()))
         .replace("{host}", &format!("{}{}{}", host_color, hostname, reset()));
     expand_prompt_vars(&pre_colored, env, cfg, 0)
@@ -543,10 +620,10 @@ fn find_git_status() -> GitStatus {
         let guard = cache.lock().unwrap_or_else(|e| e.into_inner());
         if let Some((ref cached_cwd, ref cached_result, ref cached_time)) = *guard
             && *cached_cwd == cwd
-                && cached_time.elapsed() < Duration::from_secs(2)
-            {
-                return parse_git_status_output(cached_result);
-            }
+            && cached_time.elapsed() < Duration::from_secs(2)
+        {
+            return parse_git_status_output(cached_result);
+        }
     }
     let output = match Command::new("git")
         .args(["status", "--porcelain=v1", "-b"])
@@ -643,9 +720,10 @@ fn interpret_escapes(s: &str) -> String {
                         i += 1;
                     }
                     if !oct.is_empty()
-                        && let Ok(byte) = u8::from_str_radix(&oct, 8) {
-                            result.push(byte as char);
-                        }
+                        && let Ok(byte) = u8::from_str_radix(&oct, 8)
+                    {
+                        result.push(byte as char);
+                    }
                     continue;
                 }
                 'x' => {
@@ -668,9 +746,10 @@ fn interpret_escapes(s: &str) -> String {
                         i += 1;
                     }
                     if let Ok(code) = u32::from_str_radix(&hex, 16)
-                        && let Some(c) = char::from_u32(code) {
-                            result.push(c);
-                        }
+                        && let Some(c) = char::from_u32(code)
+                    {
+                        result.push(c);
+                    }
                     continue;
                 }
                 'U' => {
@@ -681,9 +760,10 @@ fn interpret_escapes(s: &str) -> String {
                         i += 1;
                     }
                     if let Ok(code) = u32::from_str_radix(&hex, 16)
-                        && let Some(c) = char::from_u32(code) {
-                            result.push(c);
-                        }
+                        && let Some(c) = char::from_u32(code)
+                    {
+                        result.push(c);
+                    }
                     continue;
                 }
                 '1'..='7' => {
@@ -785,12 +865,36 @@ pub fn expand_prompt_vars(s: &str, env: &Env, cfg: &Config, last_status: i32) ->
     } else {
         String::new()
     };
-    let git_dirty = if git_status.dirty { cfg.prompt.git_dirty_char.clone() } else { String::new() };
-    let git_clean = if !git_status.dirty { cfg.prompt.git_clean_char.clone() } else { String::new() };
-    let git_staged = if git_status.staged > 0 { cfg.prompt.git_staged_char.clone() } else { String::new() };
-    let git_untracked = if git_status.untracked > 0 { cfg.prompt.git_untracked_char.clone() } else { String::new() };
-    let git_ahead = if git_status.ahead > 0 { cfg.prompt.git_ahead_char.clone() } else { String::new() };
-    let git_behind = if git_status.behind > 0 { cfg.prompt.git_behind_char.clone() } else { String::new() };
+    let git_dirty = if git_status.dirty {
+        cfg.prompt.git_dirty_char.clone()
+    } else {
+        String::new()
+    };
+    let git_clean = if !git_status.dirty {
+        cfg.prompt.git_clean_char.clone()
+    } else {
+        String::new()
+    };
+    let git_staged = if git_status.staged > 0 {
+        cfg.prompt.git_staged_char.clone()
+    } else {
+        String::new()
+    };
+    let git_untracked = if git_status.untracked > 0 {
+        cfg.prompt.git_untracked_char.clone()
+    } else {
+        String::new()
+    };
+    let git_ahead = if git_status.ahead > 0 {
+        cfg.prompt.git_ahead_char.clone()
+    } else {
+        String::new()
+    };
+    let git_behind = if git_status.behind > 0 {
+        cfg.prompt.git_behind_char.clone()
+    } else {
+        String::new()
+    };
     let jobs = {
         let children_file = Path::new("/proc/self/task/1/children");
         if let Ok(children) = std::fs::read_to_string(children_file) {
@@ -923,10 +1027,14 @@ pub fn expand_prompt_vars(s: &str, env: &Env, cfg: &Config, last_status: i32) ->
     };
 
     let python_venv = if cfg.prompt.show_python_venv {
-        std::env::var("VIRTUAL_ENV").ok()
-            .map(|v| std::path::Path::new(&v).file_name()
-                .map(|n| n.to_string_lossy().to_string())
-                .unwrap_or_default())
+        std::env::var("VIRTUAL_ENV")
+            .ok()
+            .map(|v| {
+                std::path::Path::new(&v)
+                    .file_name()
+                    .map(|n| n.to_string_lossy().to_string())
+                    .unwrap_or_default()
+            })
             .unwrap_or_default()
     } else {
         String::new()
@@ -934,30 +1042,34 @@ pub fn expand_prompt_vars(s: &str, env: &Env, cfg: &Config, last_status: i32) ->
 
     static NODE_VERSION_CACHE: OnceLock<String> = OnceLock::new();
     let node_version = if cfg.prompt.show_node_version {
-        NODE_VERSION_CACHE.get_or_init(|| {
-            Command::new("node")
-                .arg("--version")
-                .output()
-                .ok()
-                .and_then(|o| String::from_utf8(o.stdout).ok())
-                .map(|s| s.trim().to_string())
-                .unwrap_or_default()
-        }).clone()
+        NODE_VERSION_CACHE
+            .get_or_init(|| {
+                Command::new("node")
+                    .arg("--version")
+                    .output()
+                    .ok()
+                    .and_then(|o| String::from_utf8(o.stdout).ok())
+                    .map(|s| s.trim().to_string())
+                    .unwrap_or_default()
+            })
+            .clone()
     } else {
         String::new()
     };
 
     static RUST_VERSION_CACHE: OnceLock<String> = OnceLock::new();
     let rust_version = if cfg.prompt.show_rust_version {
-        RUST_VERSION_CACHE.get_or_init(|| {
-            Command::new("rustc")
-                .arg("--version")
-                .output()
-                .ok()
-                .and_then(|o| String::from_utf8(o.stdout).ok())
-                .map(|s| s.trim().to_string())
-                .unwrap_or_default()
-        }).clone()
+        RUST_VERSION_CACHE
+            .get_or_init(|| {
+                Command::new("rustc")
+                    .arg("--version")
+                    .output()
+                    .ok()
+                    .and_then(|o| String::from_utf8(o.stdout).ok())
+                    .map(|s| s.trim().to_string())
+                    .unwrap_or_default()
+            })
+            .clone()
     } else {
         String::new()
     };
@@ -975,7 +1087,8 @@ pub fn expand_prompt_vars(s: &str, env: &Env, cfg: &Config, last_status: i32) ->
         String::new()
     };
 
-    let result = s.replace("{cwd}", &cwd_short)
+    let result = s
+        .replace("{cwd}", &cwd_short)
         .replace("{short_cwd}", &short_cwd)
         .replace("{user}", &env.user())
         .replace("{host}", &env.hostname())
@@ -1027,20 +1140,44 @@ pub fn expand_prompt_vars(s: &str, env: &Env, cfg: &Config, last_status: i32) ->
         .replace("{tagline}", &cfg.branding.tagline)
         .replace("{version}", &cfg.branding.version)
         .replace("{author}", &cfg.branding.author)
-        .replace("{config_path}", &crate::config::loader::config_path().display().to_string())
+        .replace(
+            "{config_path}",
+            &crate::config::loader::config_path().display().to_string(),
+        )
         .replace("{shell_name}", &cfg.branding.shell_name)
         .replace("{terminal_width}", &get_terminal_width().to_string());
 
-    if result.contains('\\') && (result.contains("\\u") || result.contains("\\h") || result.contains("\\H") || result.contains("\\w") || result.contains("\\W") || result.contains("\\d") || result.contains("\\t") || result.contains("\\T") || result.contains("\\@") || result.contains("\\$") || result.contains("\\v") || result.contains("\\V") || result.contains("\\e") || result.contains("\\s")) {
+    if result.contains('\\')
+        && (result.contains("\\u")
+            || result.contains("\\h")
+            || result.contains("\\H")
+            || result.contains("\\w")
+            || result.contains("\\W")
+            || result.contains("\\d")
+            || result.contains("\\t")
+            || result.contains("\\T")
+            || result.contains("\\@")
+            || result.contains("\\$")
+            || result.contains("\\v")
+            || result.contains("\\V")
+            || result.contains("\\e")
+            || result.contains("\\s"))
+    {
         let home = env.home();
         let username = env.user();
         let hostname_full = env.hostname();
-        let hostname_short = hostname_full.split('.').next().unwrap_or(&hostname_full).to_string();
+        let hostname_short = hostname_full
+            .split('.')
+            .next()
+            .unwrap_or(&hostname_full)
+            .to_string();
         let (hh, mm, ss, mon_name, day) = unsafe {
             let mut tm: libc::tm = std::mem::zeroed();
             let now = libc::time(std::ptr::null_mut());
             libc::localtime_r(&now, &mut tm);
-            let names = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+            let names = [
+                "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
+            ];
             let mon_name = names[tm.tm_mon as usize].to_string();
             (tm.tm_hour, tm.tm_min, tm.tm_sec, mon_name, tm.tm_mday)
         };
@@ -1055,7 +1192,13 @@ pub fn expand_prompt_vars(s: &str, env: &Env, cfg: &Config, last_status: i32) ->
         };
         let cwd_base = cwd.split('/').next_back().unwrap_or(&cwd).to_string();
         let am_pm = if hh < 12 { "AM" } else { "PM" };
-        let hh_12 = if hh == 0 { 12 } else if hh > 12 { hh - 12 } else { hh };
+        let hh_12 = if hh == 0 {
+            12
+        } else if hh > 12 {
+            hh - 12
+        } else {
+            hh
+        };
         let is_root = unsafe { libc::getuid() == 0 };
         let prompt_char = if is_root { "#" } else { "$" };
         let vv = env!("CARGO_PKG_VERSION");
@@ -1069,7 +1212,10 @@ pub fn expand_prompt_vars(s: &str, env: &Env, cfg: &Config, last_status: i32) ->
         {
             let mut chars = result.chars().peekable();
             macro_rules! take_escape {
-                ($val:expr) => {{ chars.next(); out.push_str(&$val); }};
+                ($val:expr) => {{
+                    chars.next();
+                    out.push_str(&$val);
+                }};
             }
             while let Some(c) = chars.next() {
                 if c != '\\' {
@@ -1094,7 +1240,10 @@ pub fn expand_prompt_vars(s: &str, env: &Env, cfg: &Config, last_status: i32) ->
                     Some('V') => take_escape!(format!("{}-dev", vv)),
                     Some('e') => take_escape!("\x1b"),
                     Some('s') => take_escape!(ss_name),
-                    Some('\\') => { chars.next(); out.push('\\'); }
+                    Some('\\') => {
+                        chars.next();
+                        out.push('\\');
+                    }
                     _ => out.push('\\'),
                 }
             }
@@ -1111,7 +1260,12 @@ pub fn render_transient_prompt(env: &Env, cfg: &Config, last_status: i32) -> Str
     } else {
         hex_to_ansi(&cfg.colors.transient)
     };
-    let text = expand_prompt_vars(&cfg.prompt.transient_prompt_format.single(), env, cfg, last_status);
+    let text = expand_prompt_vars(
+        &cfg.prompt.transient_prompt_format.single(),
+        env,
+        cfg,
+        last_status,
+    );
     if color.is_empty() {
         text
     } else {
@@ -1136,9 +1290,11 @@ impl PromptCache {
         {
             let cache = self.cached_prompt.lock().unwrap_or_else(|e| e.into_inner());
             if let Some((ref prompt, time, cached_status)) = *cache
-                && time.elapsed() < self.cache_duration && cached_status == last_status {
-                    return prompt.clone();
-                }
+                && time.elapsed() < self.cache_duration
+                && cached_status == last_status
+            {
+                return prompt.clone();
+            }
         }
         let prompt = render_prompt(env, cfg, last_status);
         let mut cache = self.cached_prompt.lock().unwrap_or_else(|e| e.into_inner());
@@ -1243,9 +1399,18 @@ mod m19_m20_tests {
     #[test]
     fn test_shorten_cwd_home_boundary() {
         // A sibling directory sharing the home prefix must not be tilde'd.
-        assert_eq!(shorten_cwd("/home/user/project", "/home/user", 0), "~/project");
-        assert_eq!(shorten_cwd("/home/user2/x", "/home/user", 0), "/home/user2/x");
-        assert_eq!(shorten_cwd("/home/users/m", "/home/user", 0), "/home/users/m");
+        assert_eq!(
+            shorten_cwd("/home/user/project", "/home/user", 0),
+            "~/project"
+        );
+        assert_eq!(
+            shorten_cwd("/home/user2/x", "/home/user", 0),
+            "/home/user2/x"
+        );
+        assert_eq!(
+            shorten_cwd("/home/users/m", "/home/user", 0),
+            "/home/users/m"
+        );
         assert_eq!(shorten_cwd("/home/user", "/home/user", 0), "~");
     }
 }

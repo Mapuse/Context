@@ -23,16 +23,19 @@ impl Parser {
 
     fn expect_word(&mut self) -> Option<String> {
         match self.peek() {
-            Token::Word(_) | Token::SingleQuoted(_) | Token::DoubleQuoted(_) | Token::Backtick(_) => {
-                match self.advance() {
-                    Token::Word(s) | Token::SingleQuoted(s) | Token::DoubleQuoted(s) | Token::Backtick(s) => Some(s),
-                    _ => None,
-                }
-            }
+            Token::Word(_)
+            | Token::SingleQuoted(_)
+            | Token::DoubleQuoted(_)
+            | Token::Backtick(_) => match self.advance() {
+                Token::Word(s)
+                | Token::SingleQuoted(s)
+                | Token::DoubleQuoted(s)
+                | Token::Backtick(s) => Some(s),
+                _ => None,
+            },
             _ => None,
         }
     }
-
 
     fn skip_newlines(&mut self) {
         while matches!(self.peek(), Token::Newline) {
@@ -112,10 +115,11 @@ impl Parser {
     fn parse_pipeline(&mut self) -> Node {
         let mut bang = false;
         if let Token::Word(w) = self.peek()
-            && w == "!" {
-                self.advance();
-                bang = true;
-            }
+            && w == "!"
+        {
+            self.advance();
+            bang = true;
+        }
         let first = self.parse_command();
         let mut commands = vec![first];
         while matches!(self.peek(), Token::Pipe) {
@@ -173,8 +177,12 @@ impl Parser {
 
     fn parse_function_def_posix(&mut self) -> Node {
         let name = self.expect_word().unwrap_or_default();
-        if matches!(self.peek(), Token::LParen) { self.advance(); }
-        if matches!(self.peek(), Token::RParen) { self.advance(); }
+        if matches!(self.peek(), Token::LParen) {
+            self.advance();
+        }
+        if matches!(self.peek(), Token::RParen) {
+            self.advance();
+        }
         self.skip_newlines();
         let body = Box::new(self.parse_brace_group());
         Node::Function { name, body }
@@ -186,15 +194,23 @@ impl Parser {
         let values = if matches!(self.peek(), Token::In) {
             self.advance();
             let mut vals = Vec::new();
-            while let Token::Word(_) | Token::SingleQuoted(_) | Token::DoubleQuoted(_) | Token::Backtick(_) = self.peek() {
-                if let Some(v) = self.expect_word_quoted() { vals.push(v); }
+            while let Token::Word(_)
+            | Token::SingleQuoted(_)
+            | Token::DoubleQuoted(_)
+            | Token::Backtick(_) = self.peek()
+            {
+                if let Some(v) = self.expect_word_quoted() {
+                    vals.push(v);
+                }
             }
             vals
         } else {
             vec!["$@".into()]
         };
         self.skip_newlines();
-        if matches!(self.peek(), Token::Semi) { self.advance(); }
+        if matches!(self.peek(), Token::Semi) {
+            self.advance();
+        }
         self.skip_newlines();
         if !matches!(self.peek(), Token::Do) {
             eprintln!("context: syntax error: expected `do` after condition");
@@ -206,9 +222,13 @@ impl Parser {
         let mut body_cmds = Vec::new();
         loop {
             self.skip_newlines();
-            if matches!(self.peek(), Token::Done | Token::Eof) { break; }
+            if matches!(self.peek(), Token::Done | Token::Eof) {
+                break;
+            }
             body_cmds.push(self.parse_and_or());
-            if matches!(self.peek(), Token::Semi) { self.advance(); }
+            if matches!(self.peek(), Token::Semi) {
+                self.advance();
+            }
         }
         if matches!(self.peek(), Token::Done) {
             self.advance();
@@ -232,7 +252,11 @@ impl Parser {
             left
         };
 
-        Node::Select { var, values, body: Box::new(body) }
+        Node::Select {
+            var,
+            values,
+            body: Box::new(body),
+        }
     }
 
     fn parse_test_double_bracket(&mut self) -> Node {
@@ -266,7 +290,9 @@ impl Parser {
                 }
             }
         }
-        Node::TestDoubleBracket { tokens: inner_tokens }
+        Node::TestDoubleBracket {
+            tokens: inner_tokens,
+        }
     }
 
     fn expect_word_quoted(&mut self) -> Option<String> {
@@ -274,16 +300,18 @@ impl Parser {
             Token::SingleQuoted(_) => {
                 if let Token::SingleQuoted(s) = self.advance() {
                     Some(format!("\x02{}\x02", s))
-                } else { None }
+                } else {
+                    None
+                }
             }
             Token::DoubleQuoted(_) => {
                 if let Token::DoubleQuoted(s) = self.advance() {
                     Some(format!("\x01{}\x01", s))
-                } else { None }
+                } else {
+                    None
+                }
             }
-            Token::Word(_) | Token::Backtick(_) => {
-                self.expect_word()
-            }
+            Token::Word(_) | Token::Backtick(_) => self.expect_word(),
             _ => None,
         }
     }
@@ -324,7 +352,10 @@ impl Parser {
         let mut redirects = Vec::new();
         loop {
             match self.peek() {
-                Token::Word(_) | Token::SingleQuoted(_) | Token::DoubleQuoted(_) | Token::Backtick(_) => {
+                Token::Word(_)
+                | Token::SingleQuoted(_)
+                | Token::DoubleQuoted(_)
+                | Token::Backtick(_) => {
                     if let Some(w) = self.expect_word_quoted() {
                         words.push(w);
                     }
@@ -335,40 +366,71 @@ impl Parser {
                     let n = n.clone();
                     let saved = self.pos;
                     self.advance();
-                    if matches!(self.peek(),
-                        Token::Greater | Token::DoubleGreater | Token::Less
-                        | Token::LessLess | Token::LessLessLess | Token::LessAmp
-                        | Token::AmpGreater | Token::AmpGreaterGreater
-                        | Token::GreaterPipe | Token::GreaterAmp
-                        | Token::LessGreater)
-                        && let Ok(fd_num) = n.parse::<u32>()
-                        && let Some(r) = self.parse_redirect_with_fd(Some(fd_num)) {
-                            redirects.push(r);
-                            continue;
-                        }
+                    if matches!(
+                        self.peek(),
+                        Token::Greater
+                            | Token::DoubleGreater
+                            | Token::Less
+                            | Token::LessLess
+                            | Token::LessLessLess
+                            | Token::LessAmp
+                            | Token::AmpGreater
+                            | Token::AmpGreaterGreater
+                            | Token::GreaterPipe
+                            | Token::GreaterAmp
+                            | Token::LessGreater
+                    ) && let Ok(fd_num) = n.parse::<u32>()
+                        && let Some(r) = self.parse_redirect_with_fd(Some(fd_num))
+                    {
+                        redirects.push(r);
+                        continue;
+                    }
                     self.pos = saved;
                     words.push(n);
                     self.advance();
                 }
-                Token::Greater | Token::DoubleGreater | Token::Less | Token::LessLess
+                Token::Greater
+                | Token::DoubleGreater
+                | Token::Less
+                | Token::LessLess
                 | Token::LessLessDash
-                | Token::LessLessLess | Token::LessAmp
-                | Token::AmpGreater | Token::AmpGreaterGreater | Token::GreaterPipe
-                | Token::GreaterAmp | Token::LessGreater => {
+                | Token::LessLessLess
+                | Token::LessAmp
+                | Token::AmpGreater
+                | Token::AmpGreaterGreater
+                | Token::GreaterPipe
+                | Token::GreaterAmp
+                | Token::LessGreater => {
                     if let Some(r) = self.parse_redirect() {
                         redirects.push(r);
                     }
                 }
                 Token::LessLParen | Token::GreaterLParen => {
-                    let prefix = if matches!(self.peek(), Token::LessLParen) { "<" } else { ">" };
+                    let prefix = if matches!(self.peek(), Token::LessLParen) {
+                        "<"
+                    } else {
+                        ">"
+                    };
                     self.advance();
                     let inner = self.collect_balanced_parens();
                     words.push(format!("{}{}", prefix, inner));
                 }
-                Token::If | Token::Then | Token::Elif | Token::Else | Token::Fi
-                | Token::For | Token::In | Token::Do | Token::Done | Token::While
-                | Token::Until | Token::Case | Token::Esac | Token::Function
-                | Token::Select | Token::Coproc => {
+                Token::If
+                | Token::Then
+                | Token::Elif
+                | Token::Else
+                | Token::Fi
+                | Token::For
+                | Token::In
+                | Token::Do
+                | Token::Done
+                | Token::While
+                | Token::Until
+                | Token::Case
+                | Token::Esac
+                | Token::Function
+                | Token::Select
+                | Token::Coproc => {
                     // Reserved words are only special in command position;
                     // after other words they are ordinary arguments
                     // (`echo done`, `case $x in` aside).
@@ -389,13 +451,15 @@ impl Parser {
         let mut cmd_start = 0;
         for (i, w) in words.iter().enumerate() {
             if let Some(eq_pos) = w.find('=')
-                && eq_pos > 0 && !w.starts_with('=') {
-                    let name = w[..eq_pos].to_string();
-                    let value = w[eq_pos + 1..].to_string();
-                    assignments.push((name, value));
-                    cmd_start = i + 1;
-                    continue;
-                }
+                && eq_pos > 0
+                && !w.starts_with('=')
+            {
+                let name = w[..eq_pos].to_string();
+                let value = w[eq_pos + 1..].to_string();
+                assignments.push((name, value));
+                cmd_start = i + 1;
+                continue;
+            }
             break;
         }
         words = words[cmd_start..].to_vec();
@@ -416,7 +480,12 @@ impl Parser {
             return left;
         }
 
-        Node::Command { words, redirects, background: false, prefix_env: assignments }
+        Node::Command {
+            words,
+            redirects,
+            background: false,
+            prefix_env: assignments,
+        }
     }
 
     fn parse_redirect(&mut self) -> Option<Redirect> {
@@ -425,17 +494,24 @@ impl Parser {
 
     fn parse_redirect_with_fd(&mut self, fd: Option<u32>) -> Option<Redirect> {
         let kind = match self.peek() {
-            Token::Greater => { self.advance(); RedirKind::Output }
-            Token::DoubleGreater => { self.advance(); RedirKind::OutputAppend }
-            Token::Less => { self.advance(); RedirKind::Input }
+            Token::Greater => {
+                self.advance();
+                RedirKind::Output
+            }
+            Token::DoubleGreater => {
+                self.advance();
+                RedirKind::OutputAppend
+            }
+            Token::Less => {
+                self.advance();
+                RedirKind::Input
+            }
             Token::LessLess => {
                 self.advance();
                 // The lexer captured the body verbatim; it follows the
                 // operator token directly.
                 let body = match self.peek() {
-                    Token::HereDocBody(body, expand) => {
-                        Some((body.clone(), *expand))
-                    }
+                    Token::HereDocBody(body, expand) => Some((body.clone(), *expand)),
                     _ => None,
                 };
                 match body {
@@ -446,17 +522,27 @@ impl Parser {
                     None => RedirKind::HereDocBody(String::new(), true),
                 }
             }
-            Token::AmpGreater => { self.advance(); RedirKind::OutputFd }
-            Token::AmpGreaterGreater => { self.advance(); RedirKind::OutputFdAppend }
-            Token::GreaterPipe => { self.advance(); RedirKind::Clobber }
-            Token::GreaterAmp => { self.advance(); RedirKind::RedirectFd }
+            Token::AmpGreater => {
+                self.advance();
+                RedirKind::OutputFd
+            }
+            Token::AmpGreaterGreater => {
+                self.advance();
+                RedirKind::OutputFdAppend
+            }
+            Token::GreaterPipe => {
+                self.advance();
+                RedirKind::Clobber
+            }
+            Token::GreaterAmp => {
+                self.advance();
+                RedirKind::RedirectFd
+            }
             Token::LessLessDash => {
                 self.advance();
                 // `<<-` bodies were tab-stripped by the lexer as well.
                 let body = match self.peek() {
-                    Token::HereDocBody(body, expand) => {
-                        Some((body.clone(), *expand))
-                    }
+                    Token::HereDocBody(body, expand) => Some((body.clone(), *expand)),
                     _ => None,
                 };
                 match body {
@@ -474,8 +560,14 @@ impl Parser {
                 let word = self.expect_word().unwrap_or_default();
                 RedirKind::HereString(word)
             }
-            Token::LessAmp => { self.advance(); RedirKind::InputFd }
-            Token::LessGreater => { self.advance(); RedirKind::RedirectOpen }
+            Token::LessAmp => {
+                self.advance();
+                RedirKind::InputFd
+            }
+            Token::LessGreater => {
+                self.advance();
+                RedirKind::RedirectOpen
+            }
             _ => return None,
         };
         let target = if matches!(kind, RedirKind::HereDocBody(..) | RedirKind::HereString(..)) {
@@ -494,7 +586,9 @@ impl Parser {
         } else if matches!(self.peek(), Token::Eof) {
             eprintln!("context: syntax error: unexpected end of input, expected `)`");
         }
-        Node::Subshell { body: Box::new(body) }
+        Node::Subshell {
+            body: Box::new(body),
+        }
     }
 
     fn parse_brace_group(&mut self) -> Node {
@@ -507,7 +601,9 @@ impl Parser {
         } else if matches!(self.peek(), Token::Eof) {
             eprintln!("context: syntax error: unexpected end of input, expected `}}`");
         }
-        Node::BraceGroup { body: Box::new(body) }
+        Node::BraceGroup {
+            body: Box::new(body),
+        }
     }
 
     fn parse_if(&mut self) -> Node {
@@ -555,7 +651,12 @@ impl Parser {
                 _ => break,
             }
         }
-        Node::If { condition, then_body, elif, else_body }
+        Node::If {
+            condition,
+            then_body,
+            elif,
+            else_body,
+        }
     }
 
     fn parse_while(&mut self) -> Node {
@@ -607,15 +708,23 @@ impl Parser {
         let values = if matches!(self.peek(), Token::In) {
             self.advance();
             let mut vals = Vec::new();
-            while let Token::Word(_) | Token::SingleQuoted(_) | Token::DoubleQuoted(_) | Token::Backtick(_) = self.peek() {
-                if let Some(v) = self.expect_word_quoted() { vals.push(v); }
+            while let Token::Word(_)
+            | Token::SingleQuoted(_)
+            | Token::DoubleQuoted(_)
+            | Token::Backtick(_) = self.peek()
+            {
+                if let Some(v) = self.expect_word_quoted() {
+                    vals.push(v);
+                }
             }
             vals
         } else {
             vec!["$@".into()]
         };
         self.skip_newlines();
-        if matches!(self.peek(), Token::Semi) { self.advance(); }
+        if matches!(self.peek(), Token::Semi) {
+            self.advance();
+        }
         self.skip_newlines();
         if !matches!(self.peek(), Token::Do) {
             eprintln!("context: syntax error: expected `do` after condition");
@@ -657,7 +766,11 @@ impl Parser {
             left
         };
 
-        Node::For { var, values, body: Box::new(body) }
+        Node::For {
+            var,
+            values,
+            body: Box::new(body),
+        }
     }
 
     fn parse_for_cstyle(&mut self) -> Node {
@@ -666,7 +779,10 @@ impl Parser {
         let mut cur = String::new();
         loop {
             match self.peek() {
-                Token::RBraceBrace => { self.advance(); break; }
+                Token::RBraceBrace => {
+                    self.advance();
+                    break;
+                }
                 Token::Eof => break,
                 Token::Semi => {
                     parts.push(cur.trim().to_string());
@@ -686,14 +802,14 @@ impl Parser {
         if !cur.trim().is_empty() {
             parts.push(cur.trim().to_string());
         }
-        let get = |parts: &[String], i: usize| {
-            parts.get(i).filter(|s| !s.is_empty()).cloned()
-        };
+        let get = |parts: &[String], i: usize| parts.get(i).filter(|s| !s.is_empty()).cloned();
         let init = get(&parts, 0);
         let cond = get(&parts, 1);
         let incr = get(&parts, 2);
         self.skip_newlines();
-        if matches!(self.peek(), Token::Semi) { self.advance(); }
+        if matches!(self.peek(), Token::Semi) {
+            self.advance();
+        }
         self.skip_newlines();
         if !matches!(self.peek(), Token::Do) {
             eprintln!("context: syntax error: expected `do` after condition");
@@ -735,14 +851,21 @@ impl Parser {
             left
         };
 
-        Node::ForArith { init, cond, incr, body: Box::new(body) }
+        Node::ForArith {
+            init,
+            cond,
+            incr,
+            body: Box::new(body),
+        }
     }
 
     fn parse_case(&mut self) -> Node {
         self.advance();
         let word = self.expect_word().unwrap_or_default();
         self.skip_newlines();
-        if matches!(self.peek(), Token::In) { self.advance(); }
+        if matches!(self.peek(), Token::In) {
+            self.advance();
+        }
         let mut arms = Vec::new();
         loop {
             self.skip_newlines();
@@ -772,7 +895,14 @@ impl Parser {
             let mut body_cmds = Vec::new();
             loop {
                 self.skip_newlines();
-                if matches!(self.peek(), Token::DoubleSemi | Token::SemiAmp | Token::SemiSemiAmp | Token::Esac | Token::Eof) {
+                if matches!(
+                    self.peek(),
+                    Token::DoubleSemi
+                        | Token::SemiAmp
+                        | Token::SemiSemiAmp
+                        | Token::Esac
+                        | Token::Eof
+                ) {
                     break;
                 }
                 body_cmds.push(self.parse_and_or());
@@ -782,9 +912,18 @@ impl Parser {
             }
             let mut terminator = CaseTerminator::DoubleSemi;
             match self.peek() {
-                Token::DoubleSemi => { self.advance(); terminator = CaseTerminator::DoubleSemi; }
-                Token::SemiAmp => { self.advance(); terminator = CaseTerminator::AmpSemi; }
-                Token::SemiSemiAmp => { self.advance(); terminator = CaseTerminator::SemiAmp; }
+                Token::DoubleSemi => {
+                    self.advance();
+                    terminator = CaseTerminator::DoubleSemi;
+                }
+                Token::SemiAmp => {
+                    self.advance();
+                    terminator = CaseTerminator::AmpSemi;
+                }
+                Token::SemiSemiAmp => {
+                    self.advance();
+                    terminator = CaseTerminator::SemiAmp;
+                }
                 _ => {}
             }
             let body = if body_cmds.len() == 1 {
@@ -811,8 +950,12 @@ impl Parser {
         self.advance();
         let name = self.expect_word().unwrap_or_default();
         self.skip_newlines();
-        if matches!(self.peek(), Token::LParen) { self.advance(); }
-        if matches!(self.peek(), Token::RParen) { self.advance(); }
+        if matches!(self.peek(), Token::LParen) {
+            self.advance();
+        }
+        if matches!(self.peek(), Token::RParen) {
+            self.advance();
+        }
         self.skip_newlines();
         let body = Box::new(self.parse_brace_group());
         Node::Function { name, body }
@@ -823,7 +966,10 @@ impl Parser {
         let mut expr = String::new();
         loop {
             match self.peek() {
-                Token::RBraceBrace => { self.advance(); break; }
+                Token::RBraceBrace => {
+                    self.advance();
+                    break;
+                }
                 Token::Eof => break,
                 t => {
                     expr.push_str(&t.to_string());
@@ -893,7 +1039,10 @@ mod tests {
     fn test_and() {
         let ast = parse(tokenize("true && echo ok"));
         match ast {
-            Node::Compound { kind: CompoundKind::And, .. } => {}
+            Node::Compound {
+                kind: CompoundKind::And,
+                ..
+            } => {}
             _ => panic!("expected And compound"),
         }
     }
@@ -938,7 +1087,9 @@ mod tests {
     fn test_redirect() {
         let ast = parse(tokenize("echo x > /tmp/out.txt"));
         match ast {
-            Node::Command { words, redirects, .. } => {
+            Node::Command {
+                words, redirects, ..
+            } => {
                 assert_eq!(words, vec!["echo", "x"]);
                 assert_eq!(redirects.len(), 1);
             }
@@ -950,7 +1101,11 @@ mod tests {
     fn test_background() {
         let ast = parse(tokenize("sleep 10 &"));
         match ast {
-            Node::Compound { kind: CompoundKind::Background, left, .. } => {
+            Node::Compound {
+                kind: CompoundKind::Background,
+                left,
+                ..
+            } => {
                 assert!(matches!(*left, Node::Command { .. }));
             }
             _ => panic!("expected Background compound"),
@@ -961,7 +1116,10 @@ mod tests {
     fn test_or() {
         let ast = parse(tokenize("false || echo fallback"));
         match ast {
-            Node::Compound { kind: CompoundKind::Or, .. } => {}
+            Node::Compound {
+                kind: CompoundKind::Or,
+                ..
+            } => {}
             _ => panic!("expected Or compound"),
         }
     }
@@ -970,7 +1128,10 @@ mod tests {
     fn test_semicolon_compound() {
         let ast = parse(tokenize("echo a; echo b"));
         match ast {
-            Node::Compound { kind: CompoundKind::Semicolon, .. } => {}
+            Node::Compound {
+                kind: CompoundKind::Semicolon,
+                ..
+            } => {}
             _ => panic!("expected Semicolon compound"),
         }
     }
@@ -995,9 +1156,13 @@ mod tests {
 
     #[test]
     fn test_if_elif_else() {
-        let ast = parse(tokenize("if false; then echo a; elif true; then echo b; else echo c; fi"));
+        let ast = parse(tokenize(
+            "if false; then echo a; elif true; then echo b; else echo c; fi",
+        ));
         match ast {
-            Node::If { elif, else_body, .. } => {
+            Node::If {
+                elif, else_body, ..
+            } => {
                 assert_eq!(elif.len(), 1);
                 assert!(else_body.is_some());
             }
@@ -1143,7 +1308,9 @@ mod tests {
     fn test_for_cstyle() {
         let ast = parse(tokenize("for ((i=0; i<10; i++)) do echo $i; done"));
         match ast {
-            Node::ForArith { init, cond, incr, .. } => {
+            Node::ForArith {
+                init, cond, incr, ..
+            } => {
                 assert!(init.is_some());
                 assert!(cond.is_some());
                 assert!(incr.is_some());
@@ -1176,7 +1343,11 @@ mod tests {
         let mut p = Parser::new(tokens);
         let ast = p.parse();
         match ast {
-            Node::Compound { kind: CompoundKind::Semicolon, left, right } => {
+            Node::Compound {
+                kind: CompoundKind::Semicolon,
+                left,
+                right,
+            } => {
                 assert!(matches!(*left, Node::Command { .. }));
                 assert!(matches!(*right, Node::Command { .. }));
                 if let Node::Command { redirects, .. } = *left {
@@ -1197,14 +1368,12 @@ mod tests {
     fn test_heredoc_dash_strips_tabs() {
         let ast = parse(tokenize("cat <<-EOF\n\ttabbed line\n\tEOF"));
         match ast {
-            Node::Command { redirects, .. } => {
-                match &redirects[0].kind {
-                    RedirKind::HereDocBody(body, _) => {
-                        assert_eq!(body, "tabbed line\n");
-                    }
-                    _ => panic!("expected HereDocBody"),
+            Node::Command { redirects, .. } => match &redirects[0].kind {
+                RedirKind::HereDocBody(body, _) => {
+                    assert_eq!(body, "tabbed line\n");
                 }
-            }
+                _ => panic!("expected HereDocBody"),
+            },
             _ => panic!("expected Command with heredoc"),
         }
     }
@@ -1213,7 +1382,9 @@ mod tests {
     fn test_redirect_stderr_to_stdout() {
         let ast = parse(tokenize("cmd 2>&1"));
         match ast {
-            Node::Command { redirects, words, .. } => {
+            Node::Command {
+                redirects, words, ..
+            } => {
                 assert!(words.contains(&"cmd".to_string()));
                 assert_eq!(redirects.len(), 1);
                 assert_eq!(redirects[0].fd, Some(2));
@@ -1242,7 +1413,11 @@ mod tests {
     fn test_background_command() {
         let ast = parse(tokenize("cmd &"));
         match ast {
-            Node::Compound { kind: CompoundKind::Background, left, right } => {
+            Node::Compound {
+                kind: CompoundKind::Background,
+                left,
+                right,
+            } => {
                 match *left {
                     Node::Command { words, .. } => assert_eq!(words, vec!["cmd"]),
                     _ => panic!("expected background Command"),
@@ -1257,7 +1432,11 @@ mod tests {
     fn test_background_list_continues() {
         let ast = parse(tokenize("echo a & echo b"));
         match ast {
-            Node::Compound { kind: CompoundKind::Background, left, right } => {
+            Node::Compound {
+                kind: CompoundKind::Background,
+                left,
+                right,
+            } => {
                 assert!(matches!(*left, Node::Command { .. }));
                 assert!(matches!(*right, Node::Command { .. }));
             }
@@ -1346,8 +1525,18 @@ mod tests {
     fn test_double_amp_background() {
         let ast = parse(tokenize("echo a && echo b &"));
         match ast {
-            Node::Compound { kind: CompoundKind::Background, left, .. } => {
-                assert!(matches!(*left, Node::Compound { kind: CompoundKind::And, .. }));
+            Node::Compound {
+                kind: CompoundKind::Background,
+                left,
+                ..
+            } => {
+                assert!(matches!(
+                    *left,
+                    Node::Compound {
+                        kind: CompoundKind::And,
+                        ..
+                    }
+                ));
             }
             _ => panic!("expected Background compound wrapping And"),
         }
@@ -1367,7 +1556,9 @@ mod tests {
 
     #[test]
     fn test_case_with_glob_pattern() {
-        let ast = parse(tokenize("case $x in *.txt) echo text ;; *) echo other ;; esac"));
+        let ast = parse(tokenize(
+            "case $x in *.txt) echo text ;; *) echo other ;; esac",
+        ));
         match ast {
             Node::Case { arms, .. } => {
                 assert_eq!(arms.len(), 2);
@@ -1383,7 +1574,13 @@ mod tests {
         let ast = parse(tokenize("(echo a; echo b)"));
         match ast {
             Node::Subshell { body } => {
-                assert!(matches!(*body, Node::Compound { kind: CompoundKind::Semicolon, .. }));
+                assert!(matches!(
+                    *body,
+                    Node::Compound {
+                        kind: CompoundKind::Semicolon,
+                        ..
+                    }
+                ));
             }
             _ => panic!("expected Subshell"),
         }
@@ -1436,7 +1633,10 @@ mod tests {
     fn test_and_or_chain() {
         let ast = parse(tokenize("cmd1 && cmd2 || cmd3"));
         match ast {
-            Node::Compound { kind: CompoundKind::Or, .. } => {}
+            Node::Compound {
+                kind: CompoundKind::Or,
+                ..
+            } => {}
             _ => panic!("expected Or compound"),
         }
     }
@@ -1458,9 +1658,15 @@ mod tests {
     fn test_background_list() {
         let ast = parse(tokenize("echo a & echo b"));
         match ast {
-            Node::Compound { kind: CompoundKind::Background, left, right } => {
+            Node::Compound {
+                kind: CompoundKind::Background,
+                left,
+                right,
+            } => {
                 match *left {
-                    Node::Command { words, background, .. } => {
+                    Node::Command {
+                        words, background, ..
+                    } => {
                         assert_eq!(words, vec!["echo", "a"]);
                         assert!(!background);
                     }
@@ -1487,5 +1693,3 @@ mod tests {
         }
     }
 }
-
-

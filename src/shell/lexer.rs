@@ -198,8 +198,7 @@ impl Lexer {
         let mut word = String::new();
         while let Some(ch) = self.peek() {
             match ch {
-                ' ' | '\t' | '\r' | '\n' | '|' | '&' | ';' | '(' | ')'
-                | '<' | '>' => break,
+                ' ' | '\t' | '\r' | '\n' | '|' | '&' | ';' | '(' | ')' | '<' | '>' => break,
                 '#' if word.is_empty() => {
                     self.skip_comment();
                     break;
@@ -249,7 +248,9 @@ impl Lexer {
     /// `$'...'` and the special variables. The leading `$` is consumed.
     fn read_dollar_word(&mut self) -> String {
         self.advance();
-        let Some(ch) = self.peek() else { return "$".to_string() };
+        let Some(ch) = self.peek() else {
+            return "$".to_string();
+        };
         match ch {
             '\'' => {
                 self.advance();
@@ -276,14 +277,23 @@ impl Lexer {
                         self.advance();
                     } else {
                         match c {
-                            '(' => { depth += 1; sub.push(c); self.advance(); }
+                            '(' => {
+                                depth += 1;
+                                sub.push(c);
+                                self.advance();
+                            }
                             ')' => {
                                 depth -= 1;
                                 sub.push(c);
                                 self.advance();
-                                if depth == 0 { break; }
+                                if depth == 0 {
+                                    break;
+                                }
                             }
-                            _ => { sub.push(c); self.advance(); }
+                            _ => {
+                                sub.push(c);
+                                self.advance();
+                            }
                         }
                     }
                 }
@@ -309,7 +319,10 @@ impl Lexer {
                         self.advance();
                     } else {
                         match c {
-                            '{' => { depth += 1; var.push(c); }
+                            '{' => {
+                                depth += 1;
+                                var.push(c);
+                            }
                             '}' => {
                                 var.push(c);
                                 depth -= 1;
@@ -318,7 +331,9 @@ impl Lexer {
                                     break;
                                 }
                             }
-                            _ => { var.push(c); }
+                            _ => {
+                                var.push(c);
+                            }
                         }
                         self.advance();
                     }
@@ -366,15 +381,16 @@ impl Lexer {
                 '"' => return s,
                 '\\' => {
                     if let Some(next) = self.advance()
-                        && next != '\n' {
-                            match next {
-                                '$' | '`' | '\\' | '"' => s.push(next),
-                                _ => {
-                                    s.push('\\');
-                                    s.push(next);
-                                }
+                        && next != '\n'
+                    {
+                        match next {
+                            '$' | '`' | '\\' | '"' => s.push(next),
+                            _ => {
+                                s.push('\\');
+                                s.push(next);
                             }
                         }
+                    }
                 }
                 _ => s.push(ch),
             }
@@ -431,7 +447,9 @@ impl Lexer {
                                 if d.is_ascii_digit() && d <= '7' && oct.len() < 3 {
                                     oct.push(d);
                                     self.advance();
-                                } else { break; }
+                                } else {
+                                    break;
+                                }
                             }
                             if let Ok(byte) = u8::from_str_radix(&oct, 8) {
                                 s.push(byte as char);
@@ -445,7 +463,9 @@ impl Lexer {
                                     hex.push(d);
                                     self.advance();
                                     count += 1;
-                                } else { break; }
+                                } else {
+                                    break;
+                                }
                             }
                             if let Ok(byte) = u8::from_str_radix(&hex, 16) {
                                 s.push(byte as char);
@@ -459,12 +479,15 @@ impl Lexer {
                                     hex.push(d);
                                     self.advance();
                                     count += 1;
-                                } else { break; }
+                                } else {
+                                    break;
+                                }
                             }
                             if let Ok(code) = u32::from_str_radix(&hex, 16)
-                                && let Some(ch) = char::from_u32(code) {
-                                    s.push(ch);
-                                }
+                                && let Some(ch) = char::from_u32(code)
+                            {
+                                s.push(ch);
+                            }
                         }
                         'U' => {
                             let mut hex = String::new();
@@ -474,29 +497,53 @@ impl Lexer {
                                     hex.push(d);
                                     self.advance();
                                     count += 1;
-                                } else { break; }
+                                } else {
+                                    break;
+                                }
                             }
                             if let Ok(code) = u32::from_str_radix(&hex, 16)
-                                && let Some(ch) = char::from_u32(code) {
-                                    s.push(ch);
-                                }
+                                && let Some(ch) = char::from_u32(code)
+                            {
+                                s.push(ch);
+                            }
                         }
                         'c' => {
                             if let Some(ch) = self.advance() {
                                 if ch == '\\' {
                                     if let Some(next_ch) = self.advance() {
                                         let ctrl = match next_ch {
-                                            'a' => 0x01, 'b' => 0x02, 'c' => 0x03,
-                                            'd' => 0x04, 'e' => 0x05, 'f' => 0x06,
-                                            'g' => 0x07, 'h' => 0x08, 'i' => 0x09,
-                                            'j' => 0x0a, 'k' => 0x0b, 'l' => 0x0c,
-                                            'm' => 0x0d, 'n' => 0x0e, 'o' => 0x0f,
-                                            'p' => 0x10, 'q' => 0x11, 'r' => 0x12,
-                                            's' => 0x13, 't' => 0x14, 'u' => 0x15,
-                                            'v' => 0x16, 'w' => 0x17, 'x' => 0x18,
-                                            'y' => 0x19, 'z' => 0x1a,
-                                            '[' => 0x1b, '\\' => 0x1c, ']' => 0x1d,
-                                            '^' => 0x1e, '_' => 0x1f, '?' => 0x7f,
+                                            'a' => 0x01,
+                                            'b' => 0x02,
+                                            'c' => 0x03,
+                                            'd' => 0x04,
+                                            'e' => 0x05,
+                                            'f' => 0x06,
+                                            'g' => 0x07,
+                                            'h' => 0x08,
+                                            'i' => 0x09,
+                                            'j' => 0x0a,
+                                            'k' => 0x0b,
+                                            'l' => 0x0c,
+                                            'm' => 0x0d,
+                                            'n' => 0x0e,
+                                            'o' => 0x0f,
+                                            'p' => 0x10,
+                                            'q' => 0x11,
+                                            'r' => 0x12,
+                                            's' => 0x13,
+                                            't' => 0x14,
+                                            'u' => 0x15,
+                                            'v' => 0x16,
+                                            'w' => 0x17,
+                                            'x' => 0x18,
+                                            'y' => 0x19,
+                                            'z' => 0x1a,
+                                            '[' => 0x1b,
+                                            '\\' => 0x1c,
+                                            ']' => 0x1d,
+                                            '^' => 0x1e,
+                                            '_' => 0x1f,
+                                            '?' => 0x7f,
                                             _ => (next_ch as u32 & 0x1f) as u8,
                                         };
                                         s.push(ctrl as char);
@@ -595,10 +642,16 @@ impl Lexer {
                     // word terminator; otherwise it belongs to the word so
                     // brace expansion can see it (`echo {a,b,c}`).
                     let next = self.input.get(self.pos + 1).copied();
-                    let is_delimited = matches!(next,
-                        Some(' ') | Some('\t') | Some('\r') | Some('\n') | Some(';') | None);
+                    let is_delimited = matches!(
+                        next,
+                        Some(' ') | Some('\t') | Some('\r') | Some('\n') | Some(';') | None
+                    );
                     if is_delimited {
-                        tokens.push(if ch == '{' { Token::LBrace } else { Token::RBrace });
+                        tokens.push(if ch == '{' {
+                            Token::LBrace
+                        } else {
+                            Token::RBrace
+                        });
                         self.advance();
                     } else {
                         tokens.push(Token::Word(self.read_word()));
@@ -711,9 +764,22 @@ impl Lexer {
                 }
                 '$' => {
                     let mut w = self.read_dollar_word();
-                    if !matches!(self.peek(), None | Some(' ') | Some('\t') | Some('\r') | Some('\n')
-                        | Some('|') | Some('&') | Some(';') | Some('(') | Some(')')
-                        | Some('{') | Some('}') | Some('<') | Some('>')) {
+                    if !matches!(
+                        self.peek(),
+                        None | Some(' ')
+                            | Some('\t')
+                            | Some('\r')
+                            | Some('\n')
+                            | Some('|')
+                            | Some('&')
+                            | Some(';')
+                            | Some('(')
+                            | Some(')')
+                            | Some('{')
+                            | Some('}')
+                            | Some('<')
+                            | Some('>')
+                    ) {
                         w.push_str(&self.read_word());
                     }
                     tokens.push(Token::Word(w));
@@ -766,11 +832,12 @@ impl Lexer {
                     let adjacent_redirect = matches!(self.peek(), Some('<') | Some('>'));
                     if !word.is_empty()
                         && word.bytes().all(|b| b.is_ascii_digit())
-                        && adjacent_redirect {
-                            tokens.push(Token::IoNumber(word));
-                        } else {
-                            tokens.push(Self::keyword_or_word(&word));
-                        }
+                        && adjacent_redirect
+                    {
+                        tokens.push(Token::IoNumber(word));
+                    } else {
+                        tokens.push(Self::keyword_or_word(&word));
+                    }
                 }
             }
         }
@@ -816,7 +883,6 @@ impl Lexer {
         }
         out
     }
-
 }
 
 pub fn tokenize(input: &str) -> Vec<Token> {
@@ -1000,7 +1066,11 @@ mod tests {
     fn test_brace_expansion() {
         let tokens = tokenize("echo {a,b,c}");
         assert_eq!(tokens[1], Token::Word("{a,b,c}".into()));
-        assert!(!tokens.iter().any(|t| matches!(t, Token::LBrace | Token::RBrace)));
+        assert!(
+            !tokens
+                .iter()
+                .any(|t| matches!(t, Token::LBrace | Token::RBrace))
+        );
         let tokens = tokenize("f() { echo hi; }");
         assert!(tokens.contains(&Token::LBrace));
         assert!(tokens.contains(&Token::RBrace));
@@ -1016,7 +1086,9 @@ mod tests {
     #[test]
     fn test_dollar_paren_in_double_quotes() {
         let tokens = tokenize(r#"echo "$(cmd)""#);
-        let found = tokens.iter().any(|t| matches!(t, Token::DoubleQuoted(w) if w.contains("$(cmd)")));
+        let found = tokens
+            .iter()
+            .any(|t| matches!(t, Token::DoubleQuoted(w) if w.contains("$(cmd)")));
         assert!(found);
     }
 
@@ -1128,7 +1200,9 @@ mod tests {
     #[test]
     fn test_ansi_c_quoted() {
         let tokens = tokenize(r#"echo $'hello\nworld'"#);
-        let found = tokens.iter().any(|t| matches!(t, Token::Word(w) if w.starts_with("$'")));
+        let found = tokens
+            .iter()
+            .any(|t| matches!(t, Token::Word(w) if w.starts_with("$'")));
         assert!(found);
     }
 
@@ -1160,7 +1234,10 @@ mod tests {
     #[test]
     fn test_escape_newline_in_word() {
         let tokens = tokenize("echo hello\\\nworld");
-        let word_tokens: Vec<&Token> = tokens.iter().filter(|t| matches!(t, Token::Word(w) if w == "helloworld")).collect();
+        let word_tokens: Vec<&Token> = tokens
+            .iter()
+            .filter(|t| matches!(t, Token::Word(w) if w == "helloworld"))
+            .collect();
         assert_eq!(word_tokens.len(), 1);
     }
 
@@ -1212,6 +1289,3 @@ mod tests {
         assert!(tokens.contains(&Token::LessGreater));
     }
 }
-
-
-

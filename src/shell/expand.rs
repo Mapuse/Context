@@ -1,6 +1,6 @@
+use crate::shell::env::Env;
 use std::cell::{Cell, RefCell};
 use std::sync::atomic::AtomicUsize;
-use crate::shell::env::Env;
 
 pub static CURRENT_LINE: AtomicUsize = AtomicUsize::new(1);
 
@@ -16,7 +16,12 @@ pub struct Expander<'a> {
 }
 
 impl<'a> Expander<'a> {
-    pub fn new(env: &'a mut Env, last_status: i32, positional: Vec<String>, background_pid: i32) -> Self {
+    pub fn new(
+        env: &'a mut Env,
+        last_status: i32,
+        positional: Vec<String>,
+        background_pid: i32,
+    ) -> Self {
         let positional = if positional.is_empty() {
             env.positional().to_vec()
         } else {
@@ -47,11 +52,15 @@ impl<'a> Expander<'a> {
                 '\x02' => {
                     i += 1;
                     let start = i;
-                    while i < len && chars[i] != '\x02' { i += 1; }
+                    while i < len && chars[i] != '\x02' {
+                        i += 1;
+                    }
                     result.push('\x02');
                     result.push_str(&word[start..i]);
                     result.push('\x02');
-                    if i < len { i += 1; }
+                    if i < len {
+                        i += 1;
+                    }
                 }
                 '\x01' => {
                     i += 1;
@@ -60,7 +69,9 @@ impl<'a> Expander<'a> {
                         if chars[i] == '$' && i + 1 < len && chars[i + 1] == '@' {
                             i += 2;
                             for (j, param) in self.positional.iter().enumerate() {
-                                if j > 0 { result.push(' '); }
+                                if j > 0 {
+                                    result.push(' ');
+                                }
                                 result.push('\x01');
                                 result.push_str(param);
                                 result.push('\x01');
@@ -69,24 +80,34 @@ impl<'a> Expander<'a> {
                             i += 2;
                             let sep = match self.env.get("IFS") {
                                 Some("") => String::new(),
-                                Some(ifs) => ifs.chars().next().map(|c| c.to_string()).unwrap_or_else(|| " ".to_string()),
+                                Some(ifs) => ifs
+                                    .chars()
+                                    .next()
+                                    .map(|c| c.to_string())
+                                    .unwrap_or_else(|| " ".to_string()),
                                 None => " ".to_string(),
                             };
                             result.push_str(&self.positional.join(&sep));
                         } else if chars[i] == '$' && i + 1 < len {
                             i += 1;
                             result.push_str(&self.expand_dollar(&chars, &mut i, len));
-                        } else if chars[i] == '\\' && i + 1 < len
-                            && matches!(chars[i + 1], '$' | '`' | '"' | '\\') {
-                                i += 1;
-                                result.push(chars[i]);
-                                i += 1;
+                        } else if chars[i] == '\\'
+                            && i + 1 < len
+                            && matches!(chars[i + 1], '$' | '`' | '"' | '\\')
+                        {
+                            i += 1;
+                            result.push(chars[i]);
+                            i += 1;
                         } else if chars[i] == '`' {
                             i += 1;
                             let start = i;
-                            while i < len && chars[i] != '`' { i += 1; }
+                            while i < len && chars[i] != '`' {
+                                i += 1;
+                            }
                             let inner = &word[start..i];
-                            if i < len { i += 1; }
+                            if i < len {
+                                i += 1;
+                            }
                             let output = self.run_cmd_sub(inner);
                             result.push_str(&output);
                         } else {
@@ -95,7 +116,9 @@ impl<'a> Expander<'a> {
                         }
                     }
                     result.push('\x01');
-                    if i < len { i += 1; }
+                    if i < len {
+                        i += 1;
+                    }
                 }
                 '$' if i + 1 < len => {
                     i += 1;
@@ -104,16 +127,22 @@ impl<'a> Expander<'a> {
                 '`' => {
                     i += 1;
                     let start = i;
-                    while i < len && chars[i] != '`' { i += 1; }
+                    while i < len && chars[i] != '`' {
+                        i += 1;
+                    }
                     let inner = &word[start..i];
-                    if i < len { i += 1; }
+                    if i < len {
+                        i += 1;
+                    }
                     let output = self.run_cmd_sub(inner);
                     result.push_str(&output);
                 }
                 '~' if i == 0 || matches!(chars[i - 1], ' ' | ':' | '=') => {
                     i += 1;
                     let start = i;
-                    while i < len && !matches!(chars[i], '/' | ':' | ' ' | '\t' | '\n') { i += 1; }
+                    while i < len && !matches!(chars[i], '/' | ':' | ' ' | '\t' | '\n') {
+                        i += 1;
+                    }
                     let user_part = &word[start..i];
                     if user_part.is_empty() {
                         result.push_str(&self.env.home());
@@ -142,18 +171,28 @@ impl<'a> Expander<'a> {
     }
 
     pub fn expand_words(&mut self, word: &str) -> Vec<String> {
-        let brace_enabled = self.env.get("_OPT_B")
+        let brace_enabled = self
+            .env
+            .get("_OPT_B")
             .map(|s| !s.is_empty())
             .unwrap_or_else(|| {
-                self.env.get("SHELLOPTS")
+                self.env
+                    .get("SHELLOPTS")
                     .map(|s| s.contains("braceexpand"))
                     .unwrap_or(false)
             });
-        let expanded = if brace_enabled { brace_expand(word) } else { vec![word.to_string()] };
-        expanded.into_iter().flat_map(|w| {
-            let expanded_word = self.expand_word(&w);
-            self.word_split(&expanded_word)
-        }).collect()
+        let expanded = if brace_enabled {
+            brace_expand(word)
+        } else {
+            vec![word.to_string()]
+        };
+        expanded
+            .into_iter()
+            .flat_map(|w| {
+                let expanded_word = self.expand_word(&w);
+                self.word_split(&expanded_word)
+            })
+            .collect()
     }
 
     fn word_split(&self, word: &str) -> Vec<String> {
@@ -161,17 +200,29 @@ impl<'a> Expander<'a> {
             return vec![word.to_string()];
         }
         if word.contains('\x03') {
-            return word.split('\x03').filter(|s| !s.is_empty()).map(String::from).collect();
+            return word
+                .split('\x03')
+                .filter(|s| !s.is_empty())
+                .map(String::from)
+                .collect();
         }
-        let ifs = self.env.get("IFS").map(|s| s.to_string()).unwrap_or_else(|| " \t\n".to_string());
+        let ifs = self
+            .env
+            .get("IFS")
+            .map(|s| s.to_string())
+            .unwrap_or_else(|| " \t\n".to_string());
         if ifs.is_empty() {
             return vec![word.to_string()];
         }
         let ifs_chars: Vec<char> = ifs.chars().collect();
-        let ifs_ws: Vec<char> = ifs_chars.iter().copied()
+        let ifs_ws: Vec<char> = ifs_chars
+            .iter()
+            .copied()
             .filter(|c| *c == ' ' || *c == '\t' || *c == '\n')
             .collect();
-        let ifs_nws: Vec<char> = ifs_chars.iter().copied()
+        let ifs_nws: Vec<char> = ifs_chars
+            .iter()
+            .copied()
             .filter(|c| *c != ' ' && *c != '\t' && *c != '\n')
             .collect();
         let mut result = Vec::new();
@@ -233,7 +284,9 @@ impl<'a> Expander<'a> {
                             '(' => depth += 1,
                             ')' => {
                                 depth -= 1;
-                                if depth == 0 { break; }
+                                if depth == 0 {
+                                    break;
+                                }
                             }
                             _ => {}
                         }
@@ -247,9 +300,13 @@ impl<'a> Expander<'a> {
             '{' => {
                 *i += 1;
                 let start = *i;
-                while *i < len && chars[*i] != '}' { *i += 1; }
+                while *i < len && chars[*i] != '}' {
+                    *i += 1;
+                }
                 let var: String = chars[start..*i].iter().collect();
-                if *i < len { *i += 1; }
+                if *i < len {
+                    *i += 1;
+                }
                 self.expand_var(&var)
             }
             '[' => {
@@ -271,9 +328,18 @@ impl<'a> Expander<'a> {
                 let expanded_inner = self.expand_word(&inner);
                 crate::shell::builtin::eval_arith_assign(&expanded_inner, self.env).to_string()
             }
-            '?' => { *i += 1; self.last_status.to_string() }
-            '$' => { *i += 1; std::process::id().to_string() }
-            '!' => { *i += 1; self.background_pid.to_string() }
+            '?' => {
+                *i += 1;
+                self.last_status.to_string()
+            }
+            '$' => {
+                *i += 1;
+                std::process::id().to_string()
+            }
+            '!' => {
+                *i += 1;
+                self.background_pid.to_string()
+            }
             '0'..='9' => {
                 let mut n: usize = 0;
                 while *i < len && chars[*i].is_ascii_digit() {
@@ -297,14 +363,27 @@ impl<'a> Expander<'a> {
                 *i += 1;
                 let sep = match self.env.get("IFS") {
                     Some("") => String::new(),
-                    Some(ifs) => ifs.chars().next().map(|c| c.to_string()).unwrap_or_else(|| " ".to_string()),
+                    Some(ifs) => ifs
+                        .chars()
+                        .next()
+                        .map(|c| c.to_string())
+                        .unwrap_or_else(|| " ".to_string()),
                     None => " ".to_string(),
                 };
                 self.positional.join(&sep)
             }
-            '#' => { *i += 1; self.positional.len().to_string() }
-            '-' => { *i += 1; "himB".to_string() }
-            '_' => { *i += 1; self.env.get("_").unwrap_or("").to_string() }
+            '#' => {
+                *i += 1;
+                self.positional.len().to_string()
+            }
+            '-' => {
+                *i += 1;
+                "himB".to_string()
+            }
+            '_' => {
+                *i += 1;
+                self.env.get("_").unwrap_or("").to_string()
+            }
             _ => {
                 let start = *i;
                 while *i < len && (chars[*i].is_alphanumeric() || chars[*i] == '_') {
@@ -322,8 +401,8 @@ impl<'a> Expander<'a> {
     }
 
     fn run_cmd_sub(&mut self, cmd: &str) -> String {
-        use std::os::fd::FromRawFd;
         use std::io::Read;
+        use std::os::fd::FromRawFd;
 
         let mut fds = [0i32; 2];
         unsafe {
@@ -335,7 +414,10 @@ impl<'a> Expander<'a> {
 
         match unsafe { libc::fork() } {
             -1 => {
-                unsafe { libc::close(read_fd); libc::close(write_fd); }
+                unsafe {
+                    libc::close(read_fd);
+                    libc::close(write_fd);
+                }
                 String::new()
             }
             0 => {
@@ -375,9 +457,13 @@ impl<'a> Expander<'a> {
                     }
                     let mut wstatus: i32 = 0;
                     libc::waitpid(pid, &mut wstatus, 0);
-                    self.last_status = if libc::WIFEXITED(wstatus) { libc::WEXITSTATUS(wstatus) }
-                                       else if libc::WIFSIGNALED(wstatus) { 128 + libc::WTERMSIG(wstatus) }
-                                       else { 1 };
+                    self.last_status = if libc::WIFEXITED(wstatus) {
+                        libc::WEXITSTATUS(wstatus)
+                    } else if libc::WIFSIGNALED(wstatus) {
+                        128 + libc::WTERMSIG(wstatus)
+                    } else {
+                        1
+                    };
                     output
                 };
                 output.trim_end_matches('\n').to_string()
@@ -389,18 +475,23 @@ impl<'a> Expander<'a> {
         self.pending_sets.borrow_mut().drain(..).collect()
     }
 
-    pub fn set_nounset(&mut self, val: bool) { self.nounset = val; }
-    pub fn had_nounset_error(&self) -> bool { self.had_nounset_error.get() }
+    pub fn set_nounset(&mut self, val: bool) {
+        self.nounset = val;
+    }
+    pub fn had_nounset_error(&self) -> bool {
+        self.had_nounset_error.get()
+    }
 
     fn expand_var(&mut self, var: &str) -> String {
         if var.is_empty() {
             return String::new();
         }
         if let Some(name) = var.strip_prefix('!')
-            && !name.is_empty() {
-                let inner = self.env.get(name).unwrap_or("").to_string();
-                return self.env.get(&inner).unwrap_or("").to_string();
-            }
+            && !name.is_empty()
+        {
+            let inner = self.env.get(name).unwrap_or("").to_string();
+            return self.env.get(&inner).unwrap_or("").to_string();
+        }
         if let Some(name) = var.strip_prefix('#') {
             if name.is_empty() {
                 return self.positional.len().to_string();
@@ -409,7 +500,10 @@ impl<'a> Expander<'a> {
                 let name = &name[1..];
                 let val = self.env.get(name).unwrap_or("").to_string();
                 val.chars().count().to_string()
-            } else if let Some(base) = name.strip_suffix("[@]").or_else(|| name.strip_suffix("[*]")) {
+            } else if let Some(base) = name
+                .strip_suffix("[@]")
+                .or_else(|| name.strip_suffix("[*]"))
+            {
                 // ${#arr[@]} — number of array elements.
                 if self.env.is_indexed_array(base) {
                     self.env.indexed_array_len(base).to_string()
@@ -483,11 +577,19 @@ impl<'a> Expander<'a> {
             let name = &var[..colon_pos];
             let default = var[colon_pos + 2..].to_string();
             let val = self.env.get(name).unwrap_or("");
-            if val.is_empty() { self.expand_word(&default) } else { val.to_string() }
+            if val.is_empty() {
+                self.expand_word(&default)
+            } else {
+                val.to_string()
+            }
         } else if let Some(colon_pos) = var.find(":+") {
             let name = &var[..colon_pos];
             let alt = var[colon_pos + 2..].to_string();
-            if self.env.get(name).unwrap_or("").is_empty() { String::new() } else { self.expand_word(&alt) }
+            if self.env.get(name).unwrap_or("").is_empty() {
+                String::new()
+            } else {
+                self.expand_word(&alt)
+            }
         } else if let Some(colon_pos) = var.find(":=") {
             let name = &var[..colon_pos];
             let default = var[colon_pos + 2..].to_string();
@@ -495,7 +597,9 @@ impl<'a> Expander<'a> {
                 Some(v) if !v.is_empty() => v.to_string(),
                 _ => {
                     let expanded = self.expand_word(&default);
-                    self.pending_sets.borrow_mut().push((name.to_string(), expanded.clone()));
+                    self.pending_sets
+                        .borrow_mut()
+                        .push((name.to_string(), expanded.clone()));
                     expanded
                 }
             }
@@ -505,47 +609,69 @@ impl<'a> Expander<'a> {
             match self.env.get(name) {
                 Some(v) if !v.is_empty() => v.to_string(),
                 _ => {
-                    let m = if msg.is_empty() { format!("{}: parameter null or not set", name) } else { self.expand_word(&msg) };
+                    let m = if msg.is_empty() {
+                        format!("{}: parameter null or not set", name)
+                    } else {
+                        self.expand_word(&msg)
+                    };
                     eprintln!("context: {}", m);
                     self.had_nounset_error.set(true);
                     String::new()
                 }
             }
         } else if let Some(pos) = var.find('-')
-            && !var[..pos].contains(':') {
-                let name = &var[..pos];
-                let default = var[pos + 1..].to_string();
-                if self.env.get(name).is_none() { self.expand_word(&default) } else { self.env.get(name).unwrap_or("").to_string() }
+            && !var[..pos].contains(':')
+        {
+            let name = &var[..pos];
+            let default = var[pos + 1..].to_string();
+            if self.env.get(name).is_none() {
+                self.expand_word(&default)
+            } else {
+                self.env.get(name).unwrap_or("").to_string()
+            }
         } else if let Some(pos) = var.find('+')
-            && !var[..pos].contains(':') {
-                let name = &var[..pos];
-                let alt = var[pos + 1..].to_string();
-                if self.env.get(name).is_none() { String::new() } else { self.expand_word(&alt) }
+            && !var[..pos].contains(':')
+        {
+            let name = &var[..pos];
+            let alt = var[pos + 1..].to_string();
+            if self.env.get(name).is_none() {
+                String::new()
+            } else {
+                self.expand_word(&alt)
+            }
         } else if let Some(pos) = var.find('=')
-            && !var[..pos].contains(':') {
-                let name = &var[..pos];
-                let default = var[pos + 1..].to_string();
-                match self.env.get(name) {
-                    Some(_) => self.env.get(name).unwrap_or("").to_string(),
-                    None => {
-                        let expanded = self.expand_word(&default);
-                        self.pending_sets.borrow_mut().push((name.to_string(), expanded.clone()));
-                        expanded
-                    }
+            && !var[..pos].contains(':')
+        {
+            let name = &var[..pos];
+            let default = var[pos + 1..].to_string();
+            match self.env.get(name) {
+                Some(_) => self.env.get(name).unwrap_or("").to_string(),
+                None => {
+                    let expanded = self.expand_word(&default);
+                    self.pending_sets
+                        .borrow_mut()
+                        .push((name.to_string(), expanded.clone()));
+                    expanded
                 }
+            }
         } else if let Some(pos) = var.find('?')
-            && !var[..pos].contains(':') {
-                let name = &var[..pos];
-                let msg = var[pos + 1..].to_string();
-                match self.env.get(name) {
-                    Some(v) => v.to_string(),
-                    None => {
-                        let m = if msg.is_empty() { format!("{}: parameter null or not set", name) } else { self.expand_word(&msg) };
-                        eprintln!("context: {}", m);
-                        self.had_nounset_error.set(true);
-                        String::new()
-                    }
+            && !var[..pos].contains(':')
+        {
+            let name = &var[..pos];
+            let msg = var[pos + 1..].to_string();
+            match self.env.get(name) {
+                Some(v) => v.to_string(),
+                None => {
+                    let m = if msg.is_empty() {
+                        format!("{}: parameter null or not set", name)
+                    } else {
+                        self.expand_word(&msg)
+                    };
+                    eprintln!("context: {}", m);
+                    self.had_nounset_error.set(true);
+                    String::new()
                 }
+            }
         } else if let Some(inner) = var.strip_prefix('@') {
             if let Some(name) = inner.strip_suffix('Q') {
                 let val = self.env.get(name).unwrap_or("");
@@ -559,7 +685,9 @@ impl<'a> Expander<'a> {
             if let Some(semi_pos) = spec.find(':') {
                 let offset_str = &spec[..semi_pos];
                 let len_str = &spec[semi_pos + 1..];
-                if let (Ok(offset), Ok(length)) = (offset_str.parse::<isize>(), len_str.parse::<isize>()) {
+                if let (Ok(offset), Ok(length)) =
+                    (offset_str.parse::<isize>(), len_str.parse::<isize>())
+                {
                     let val = self.env.get(name).unwrap_or("").to_string();
                     let chars: Vec<char> = val.chars().collect();
                     let start = if offset < 0 {
@@ -600,18 +728,25 @@ impl<'a> Expander<'a> {
         } else if let Some(pos) = var.find('=') {
             let name = &var[..pos];
             let default = &var[pos + 1..];
-            self.pending_sets.borrow_mut().push((name.to_string(), default.to_string()));
+            self.pending_sets
+                .borrow_mut()
+                .push((name.to_string(), default.to_string()));
             default.to_string()
         } else if let Some(pos) = var.find('#') {
             // `${arr[#]}` is an indexed-array element count, not a
             // prefix-removal pattern.
             if let Some(arr_name) = var.strip_suffix("[#]")
-                && self.env.is_indexed_array(arr_name) {
-                    return self.env.indexed_array_len(arr_name).to_string();
-                }
+                && self.env.is_indexed_array(arr_name)
+            {
+                return self.env.indexed_array_len(arr_name).to_string();
+            }
             let name = &var[..pos];
             let is_double = pos + 1 < var.len() && var.as_bytes()[pos + 1] == b'#';
-            let pattern_str = if is_double { &var[pos + 2..] } else { &var[pos + 1..] };
+            let pattern_str = if is_double {
+                &var[pos + 2..]
+            } else {
+                &var[pos + 1..]
+            };
             let val = self.env.get(name).unwrap_or("").to_string();
             let val_chars: Vec<char> = val.chars().collect();
             let pattern_chars: Vec<char> = pattern_str.chars().collect();
@@ -636,7 +771,11 @@ impl<'a> Expander<'a> {
         } else if let Some(pos) = var.find('%') {
             let name = &var[..pos];
             let is_double = pos + 1 < var.len() && var.as_bytes()[pos + 1] == b'%';
-            let pattern_str = if is_double { &var[pos + 2..] } else { &var[pos + 1..] };
+            let pattern_str = if is_double {
+                &var[pos + 2..]
+            } else {
+                &var[pos + 1..]
+            };
             let val = self.env.get(name).unwrap_or("").to_string();
             let val_chars: Vec<char> = val.chars().collect();
             let pattern_chars: Vec<char> = pattern_str.chars().collect();
@@ -664,7 +803,11 @@ impl<'a> Expander<'a> {
             let is_double = pos + 1 < var.len() && var.as_bytes()[pos + 1] == b'/';
             let is_start = pos + 1 < var.len() && var.as_bytes()[pos + 1] == b'#';
             let is_end = pos + 1 < var.len() && var.as_bytes()[pos + 1] == b'%';
-            let rest = if is_double || is_start || is_end { &var[pos + 2..] } else { &var[pos + 1..] };
+            let rest = if is_double || is_start || is_end {
+                &var[pos + 2..]
+            } else {
+                &var[pos + 1..]
+            };
             let split_at = rest
                 .as_bytes()
                 .iter()
@@ -704,7 +847,11 @@ impl<'a> Expander<'a> {
                     if glob_match_simple(&pattern_chars, &val_chars[..j]) {
                         let matched: String = val_chars[..j].iter().collect();
                         for ci in 0..new_chars.len() {
-                            if new_chars[ci] == '&' || (new_chars[ci] == '\\' && ci + 1 < new_chars.len() && new_chars[ci + 1].is_ascii_digit()) {
+                            if new_chars[ci] == '&'
+                                || (new_chars[ci] == '\\'
+                                    && ci + 1 < new_chars.len()
+                                    && new_chars[ci + 1].is_ascii_digit())
+                            {
                                 result.push_str(&matched);
                             } else {
                                 result.push(new_chars[ci]);
@@ -720,7 +867,11 @@ impl<'a> Expander<'a> {
                     if glob_match_simple(&pattern_chars, &val_chars[j..]) {
                         let matched: String = val_chars[j..].iter().collect();
                         for ci in 0..new_chars.len() {
-                            if new_chars[ci] == '&' || (new_chars[ci] == '\\' && ci + 1 < new_chars.len() && new_chars[ci + 1].is_ascii_digit()) {
+                            if new_chars[ci] == '&'
+                                || (new_chars[ci] == '\\'
+                                    && ci + 1 < new_chars.len()
+                                    && new_chars[ci + 1].is_ascii_digit())
+                            {
                                 result.push_str(&matched);
                             } else {
                                 result.push(new_chars[ci]);
@@ -732,39 +883,48 @@ impl<'a> Expander<'a> {
                 }
                 val
             } else {
-            while i < val_chars.len() {
-                let mut match_len = 0;
-                for j in (i + 1..=val_chars.len()).rev() {
-                    if glob_match_simple(&pattern_chars, &val_chars[i..j]) {
-                        match_len = j - i;
-                        break;
-                    }
-                }
-                if match_len > 0 {
-                    let matched: String = val_chars[i..i+match_len].iter().collect();
-                    for ci in 0..new_chars.len() {
-                        if new_chars[ci] == '&' || (new_chars[ci] == '\\' && ci + 1 < new_chars.len() && new_chars[ci + 1].is_ascii_digit()) {
-                            result.push_str(&matched);
-                        } else {
-                            result.push(new_chars[ci]);
+                while i < val_chars.len() {
+                    let mut match_len = 0;
+                    for j in (i + 1..=val_chars.len()).rev() {
+                        if glob_match_simple(&pattern_chars, &val_chars[i..j]) {
+                            match_len = j - i;
+                            break;
                         }
                     }
-                    i += match_len;
-                    if !is_double {
-                        break;
+                    if match_len > 0 {
+                        let matched: String = val_chars[i..i + match_len].iter().collect();
+                        for ci in 0..new_chars.len() {
+                            if new_chars[ci] == '&'
+                                || (new_chars[ci] == '\\'
+                                    && ci + 1 < new_chars.len()
+                                    && new_chars[ci + 1].is_ascii_digit())
+                            {
+                                result.push_str(&matched);
+                            } else {
+                                result.push(new_chars[ci]);
+                            }
+                        }
+                        i += match_len;
+                        if !is_double {
+                            break;
+                        }
+                    } else {
+                        result.push(val_chars[i]);
+                        i += 1;
                     }
-                } else {
-                    result.push(val_chars[i]);
-                    i += 1;
                 }
-            }
-            for c in &val_chars[i..] { result.push(*c); }
-            result
+                for c in &val_chars[i..] {
+                    result.push(*c);
+                }
+                result
             }
         } else if let Some(name) = var.strip_prefix('?') {
             match self.env.get(name) {
                 Some(v) => v.to_string(),
-                None => { eprintln!("context: {}: unset variable", name); String::new() }
+                None => {
+                    eprintln!("context: {}: unset variable", name);
+                    String::new()
+                }
             }
         } else if var.contains('[') && var.ends_with(']') {
             if let Some(bracket_pos) = var.find('[') {
@@ -799,25 +959,45 @@ impl<'a> Expander<'a> {
         } else if let Some(name) = var.strip_prefix("(k)") {
             if self.env.is_indexed_array(name) {
                 let len = self.env.indexed_array_len(name);
-                (0..len).map(|i| i.to_string()).collect::<Vec<_>>().join(" ")
+                (0..len)
+                    .map(|i| i.to_string())
+                    .collect::<Vec<_>>()
+                    .join(" ")
             } else {
                 self.env.assoc_keys(name).join(" ")
             }
         } else if let Some(name) = var.strip_prefix("(v)") {
             if self.env.is_indexed_array(name) {
                 let len = self.env.indexed_array_len(name);
-                (0..len).filter_map(|i| self.env.indexed_array_get(name, &i.to_string()).map(|s| s.to_string())).collect::<Vec<_>>().join(" ")
+                (0..len)
+                    .filter_map(|i| {
+                        self.env
+                            .indexed_array_get(name, &i.to_string())
+                            .map(|s| s.to_string())
+                    })
+                    .collect::<Vec<_>>()
+                    .join(" ")
             } else {
                 self.env.assoc_values(name).join(" ")
             }
         } else if let Some(name) = var.strip_prefix("(kv)") {
             if self.env.is_indexed_array(name) {
                 let len = self.env.indexed_array_len(name);
-                (0..len).filter_map(|i| self.env.indexed_array_get(name, &i.to_string()).map(|v| format!("[{}]={}", i, v))).collect::<Vec<_>>().join(" ")
+                (0..len)
+                    .filter_map(|i| {
+                        self.env
+                            .indexed_array_get(name, &i.to_string())
+                            .map(|v| format!("[{}]={}", i, v))
+                    })
+                    .collect::<Vec<_>>()
+                    .join(" ")
             } else {
-                self.env.assoc_pairs(name).iter()
+                self.env
+                    .assoc_pairs(name)
+                    .iter()
                     .map(|(k, v)| format!("{}={}", k, v))
-                    .collect::<Vec<_>>().join(" ")
+                    .collect::<Vec<_>>()
+                    .join(" ")
             }
         } else if let Some(name) = var.strip_suffix("@Q") {
             let val = self.env.get(name).unwrap_or("");
@@ -833,8 +1013,12 @@ impl<'a> Expander<'a> {
             escape_expand(&val)
         } else if let Some(name) = var.strip_suffix("@a") {
             let mut attrs = String::new();
-            if self.env.is_readonly(name) { attrs.push('r'); }
-            if self.env.is_exported(name) { attrs.push('x'); }
+            if self.env.is_readonly(name) {
+                attrs.push('r');
+            }
+            if self.env.is_exported(name) {
+                attrs.push('x');
+            }
             attrs
         } else if let Some(name) = var.strip_suffix("@P") {
             let val = self.env.get(name).unwrap_or("").to_string();
@@ -917,7 +1101,9 @@ fn extglob_match(op: char, inner: &[char], rest: &[char], text: &[char]) -> bool
         '+' => {
             for alt in &alts {
                 for i in 1..=text.len() {
-                    if glob_match_inner(alt, &text[..i]) && extglob_match_repeat(alt, rest, &text[i..]) {
+                    if glob_match_inner(alt, &text[..i])
+                        && extglob_match_repeat(alt, rest, &text[i..])
+                    {
                         return true;
                     }
                 }
@@ -930,7 +1116,9 @@ fn extglob_match(op: char, inner: &[char], rest: &[char], text: &[char]) -> bool
             }
             for alt in &alts {
                 for i in 1..=text.len() {
-                    if glob_match_inner(alt, &text[..i]) && extglob_match_repeat(alt, rest, &text[i..]) {
+                    if glob_match_inner(alt, &text[..i])
+                        && extglob_match_repeat(alt, rest, &text[i..])
+                    {
                         return true;
                     }
                 }
@@ -954,9 +1142,10 @@ fn extglob_match(op: char, inner: &[char], rest: &[char], text: &[char]) -> bool
             for i in 0..=text.len() {
                 let prefix = &text[..i];
                 if !alts.iter().any(|alt| glob_match_inner(alt, prefix))
-                    && glob_match_inner(rest, &text[i..]) {
-                        return true;
-                    }
+                    && glob_match_inner(rest, &text[i..])
+                {
+                    return true;
+                }
             }
             false
         }
@@ -965,13 +1154,19 @@ fn extglob_match(op: char, inner: &[char], rest: &[char], text: &[char]) -> bool
 }
 
 fn glob_match_inner(pattern: &[char], text: &[char]) -> bool {
-    if pattern.is_empty() { return text.is_empty(); }
-    if pattern.len() >= 2 && matches!(pattern[0], '+' | '*' | '?' | '!' | '@') && pattern[1] == '(' {
+    if pattern.is_empty() {
+        return text.is_empty();
+    }
+    if pattern.len() >= 2 && matches!(pattern[0], '+' | '*' | '?' | '!' | '@') && pattern[1] == '('
+    {
         let mut depth = 1u32;
         let mut j = 2;
         while j < pattern.len() && depth > 0 {
-            if pattern[j] == '(' { depth += 1; }
-            else if pattern[j] == ')' { depth -= 1; }
+            if pattern[j] == '(' {
+                depth += 1;
+            } else if pattern[j] == ')' {
+                depth -= 1;
+            }
             j += 1;
         }
         if depth == 0 {
@@ -982,32 +1177,40 @@ fn glob_match_inner(pattern: &[char], text: &[char]) -> bool {
     }
     if pattern[0] == '*' {
         for i in 0..=text.len() {
-            if glob_match_inner(&pattern[1..], &text[i..]) { return true; }
+            if glob_match_inner(&pattern[1..], &text[i..]) {
+                return true;
+            }
         }
         return false;
     }
-    if text.is_empty() { return false; }
+    if text.is_empty() {
+        return false;
+    }
     if pattern[0] == '?' || pattern[0] == text[0] {
         return glob_match_inner(&pattern[1..], &text[1..]);
     }
     if pattern[0] == '[' {
         let mut pos = 1;
         let negate = pos < pattern.len() && (pattern[pos] == '^' || pattern[pos] == '!');
-        if negate { pos += 1; }
+        if negate {
+            pos += 1;
+        }
         let mut char_matches = false;
         while pos < pattern.len() && pattern[pos] != ']' {
             if pattern[pos] == ':'
-                && pos + 1 < pattern.len() && pattern[pos + 1] == ':'
-                    && let Some(end) = pattern[pos + 2..].iter().position(|&c| c == ':')
-                        && pos + 2 + end + 1 < pattern.len()
-                            && pattern[pos + 2 + end + 1] == ']' {
-                                let name: String = pattern[pos + 2..pos + 2 + end].iter().collect();
-                                if posix_class_match(text[0], &name) {
-                                    char_matches = true;
-                                }
-                                pos = pos + 2 + end + 2;
-                                continue;
-                            }
+                && pos + 1 < pattern.len()
+                && pattern[pos + 1] == ':'
+                && let Some(end) = pattern[pos + 2..].iter().position(|&c| c == ':')
+                && pos + 2 + end + 1 < pattern.len()
+                && pattern[pos + 2 + end + 1] == ']'
+            {
+                let name: String = pattern[pos + 2..pos + 2 + end].iter().collect();
+                if posix_class_match(text[0], &name) {
+                    char_matches = true;
+                }
+                pos = pos + 2 + end + 2;
+                continue;
+            }
             if pos + 2 < pattern.len() && pattern[pos + 1] == '-' && pattern[pos + 2] != ']' {
                 if text[0] >= pattern[pos] && text[0] <= pattern[pos + 2] {
                     char_matches = true;
@@ -1096,9 +1299,10 @@ fn escape_expand(s: &str) -> String {
                         i += 1;
                     }
                     if !oct.is_empty()
-                        && let Ok(byte) = u8::from_str_radix(&oct, 8) {
-                            result.push(byte as char);
-                        }
+                        && let Ok(byte) = u8::from_str_radix(&oct, 8)
+                    {
+                        result.push(byte as char);
+                    }
                     continue;
                 }
                 '1'..='7' => {
@@ -1184,7 +1388,9 @@ fn prompt_expand_basic(s: &str, env: &Env) -> String {
             match chars[i] {
                 '0' => result.push_str(env.get("0").unwrap_or("context")),
                 '!' => {
-                    let h: String = crate::shell::expand::CURRENT_LINE.load(std::sync::atomic::Ordering::Relaxed).to_string();
+                    let h: String = crate::shell::expand::CURRENT_LINE
+                        .load(std::sync::atomic::Ordering::Relaxed)
+                        .to_string();
                     result.push_str(&h);
                 }
                 '#' => {
@@ -1267,13 +1473,21 @@ fn split_brace_items(s: &str) -> Vec<String> {
     let mut depth = 0;
     for c in s.chars() {
         match c {
-            '{' => { depth += 1; current.push(c); }
-            '}' => { depth -= 1; current.push(c); }
+            '{' => {
+                depth += 1;
+                current.push(c);
+            }
+            '}' => {
+                depth -= 1;
+                current.push(c);
+            }
             ',' if depth == 0 => {
                 result.push(current.clone());
                 current.clear();
             }
-            _ => { current.push(c); }
+            _ => {
+                current.push(c);
+            }
         }
     }
     result.push(current);
@@ -1292,7 +1506,9 @@ fn expand_brace_sequence(s: &str) -> Option<Vec<String>> {
                 end_str.parse::<i64>(),
                 step_str.parse::<i64>(),
             ) {
-                if step == 0 { return None; }
+                if step == 0 {
+                    return None;
+                }
                 let mut items = Vec::new();
                 if start <= end {
                     let mut i = start;
@@ -1311,19 +1527,20 @@ fn expand_brace_sequence(s: &str) -> Option<Vec<String>> {
             }
         } else if let (Ok(start), Ok(end)) = (start_str.parse::<i64>(), rest.parse::<i64>()) {
             if start_str.chars().all(|c| c.is_ascii_digit())
-                && rest.chars().all(|c| c.is_ascii_digit()) {
-                    let mut items = Vec::new();
-                    if start <= end {
-                        for i in start..=end {
-                            items.push(i.to_string());
-                        }
-                    } else {
-                        for i in (end..=start).rev() {
-                            items.push(i.to_string());
-                        }
+                && rest.chars().all(|c| c.is_ascii_digit())
+            {
+                let mut items = Vec::new();
+                if start <= end {
+                    for i in start..=end {
+                        items.push(i.to_string());
                     }
-                    return Some(items);
+                } else {
+                    for i in (end..=start).rev() {
+                        items.push(i.to_string());
+                    }
                 }
+                return Some(items);
+            }
             if start_str.len() == 1 && rest.len() == 1 {
                 let s_char = start_str.chars().next().unwrap();
                 let e_char = rest.chars().next().unwrap();
@@ -1630,7 +1847,12 @@ mod tests {
     #[test]
     fn test_positional_parameters() {
         let mut env = Env::new();
-        let mut exp = Expander::new(&mut env, 0, vec!["one".into(), "two".into(), "three".into()], 0);
+        let mut exp = Expander::new(
+            &mut env,
+            0,
+            vec!["one".into(), "two".into(), "three".into()],
+            0,
+        );
         assert_eq!(exp.expand_word("$1"), "one");
         assert_eq!(exp.expand_word("$2"), "two");
         assert_eq!(exp.expand_word("$3"), "three");

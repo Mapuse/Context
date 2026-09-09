@@ -1,38 +1,102 @@
+use serde::de::{self, Deserializer};
 use serde::{Deserialize, Serialize};
-use serde::de::{self,Deserializer};
 
-fn default_zero() -> u32 { 0 }
-fn default_one() -> u32 { 1 }
-fn default_256() -> u32 { 256 }
-fn default_40() -> u32 { 40 }
-fn default_hex_primary() -> String { "#ffffff".into() }
-fn default_hex_accent() -> String { "#d1d5db".into() }
-fn default_hex_info() -> String { "#9ca3af".into() }
-fn default_hex_success() -> String { "#22c55e".into() }
-fn default_hex_err() -> String { "#ef4444".into() }
-fn default_hex_warning() -> String { "#f59e0b".into() }
-fn default_hex_dim() -> String { "#6b7280".into() }
-fn default_hex_text() -> String { "#f9fafb".into() }
-fn default_empty_string() -> String { String::new() }
-fn default_prompt_char() -> String { "❯".into() }
-fn default_note_char() -> String { "▸".into() }
-fn default_error_char() -> String { "✘".into() }
-fn default_exit_prefix() -> String { "exit".into() }
-fn default_success_char() -> String { "✓".into() }
-fn default_warning_char() -> String { "⚠".into() }
-fn default_arrow_char() -> String { "→".into() }
-fn default_separator_char() -> String { "·".into() }
-fn default_corner_tl() -> String { "╭".into() }
-fn default_corner_tr() -> String { "╮".into() }
-fn default_corner_bl() -> String { "╰".into() }
-fn default_corner_br() -> String { "╯".into() }
-fn default_horizontal() -> String { "─".into() }
-fn default_vertical() -> String { "│".into() }
-fn default_exit_label() -> String { "exit".into() }
-fn default_history_path() -> String { "~/.ctx/.history".into() }
-fn default_shell() -> String { "/bin/context".into() }
-fn default_user_host_format() -> String { "{user}@{host}".into() }
-fn default_cursor_symbol() -> String { "_".into() }
+fn default_zero() -> u32 {
+    0
+}
+fn default_one() -> u32 {
+    1
+}
+fn default_256() -> u32 {
+    256
+}
+fn default_40() -> u32 {
+    40
+}
+fn default_hex_primary() -> String {
+    "#ffffff".into()
+}
+fn default_hex_accent() -> String {
+    "#d1d5db".into()
+}
+fn default_hex_info() -> String {
+    "#9ca3af".into()
+}
+fn default_hex_success() -> String {
+    "#22c55e".into()
+}
+fn default_hex_err() -> String {
+    "#ef4444".into()
+}
+fn default_hex_warning() -> String {
+    "#f59e0b".into()
+}
+fn default_hex_dim() -> String {
+    "#6b7280".into()
+}
+fn default_hex_text() -> String {
+    "#f9fafb".into()
+}
+fn default_empty_string() -> String {
+    String::new()
+}
+fn default_prompt_char() -> String {
+    "❯".into()
+}
+fn default_note_char() -> String {
+    "▸".into()
+}
+fn default_error_char() -> String {
+    "✘".into()
+}
+fn default_exit_prefix() -> String {
+    "exit".into()
+}
+fn default_success_char() -> String {
+    "✓".into()
+}
+fn default_warning_char() -> String {
+    "⚠".into()
+}
+fn default_arrow_char() -> String {
+    "→".into()
+}
+fn default_separator_char() -> String {
+    "·".into()
+}
+fn default_corner_tl() -> String {
+    "╭".into()
+}
+fn default_corner_tr() -> String {
+    "╮".into()
+}
+fn default_corner_bl() -> String {
+    "╰".into()
+}
+fn default_corner_br() -> String {
+    "╯".into()
+}
+fn default_horizontal() -> String {
+    "─".into()
+}
+fn default_vertical() -> String {
+    "│".into()
+}
+fn default_exit_label() -> String {
+    "exit".into()
+}
+fn default_history_path() -> String {
+    "~/.ctx/.history".into()
+}
+fn default_shell() -> String {
+    "/bin/context".into()
+}
+fn default_user_host_format() -> String {
+    "{user}@{host}".into()
+}
+fn default_cursor_symbol() -> String {
+    "_".into()
+}
 
 /// Multi-line format text: accepts a single string or array of strings in TOML.
 /// Empty = don't show. Multiple entries = multiple lines.
@@ -42,30 +106,46 @@ fn default_cursor_symbol() -> String { "_".into() }
 pub struct MultiLineText(#[serde(deserialize_with = "deserialize_multiline")] Vec<String>);
 
 impl MultiLineText {
-    pub fn empty() -> Self { Self(Vec::new()) }
-    pub fn is_empty(&self) -> bool { self.0.is_empty() || self.0.iter().all(|s| s.is_empty()) }
-    pub fn lines(&self) -> &[String] { &self.0 }
-    pub fn single(&self) -> String { self.0.join("\n") }
+    pub fn empty() -> Self {
+        Self(Vec::new())
+    }
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty() || self.0.iter().all(|s| s.is_empty())
+    }
+    pub fn lines(&self) -> &[String] {
+        &self.0
+    }
+    pub fn single(&self) -> String {
+        self.0.join("\n")
+    }
 }
 
 impl From<&str> for MultiLineText {
-    fn from(s: &str) -> Self { Self(vec![s.to_string()]) }
+    fn from(s: &str) -> Self {
+        Self(vec![s.to_string()])
+    }
 }
 
 impl From<String> for MultiLineText {
-    fn from(s: String) -> Self { Self(vec![s]) }
+    fn from(s: String) -> Self {
+        Self(vec![s])
+    }
 }
 
 impl MultiLineText {
     /// Expand `{key}` variables in each line. Accepts any UTF-8 characters.
     pub fn expand(&self, vars: &[(&str, &str)]) -> String {
-        self.0.iter().map(|line| {
-            let mut out = line.clone();
-            for &(k, v) in vars {
-                out = out.replace(&format!("{{{}}}", k), v);
-            }
-            out
-        }).collect::<Vec<_>>().join("\n")
+        self.0
+            .iter()
+            .map(|line| {
+                let mut out = line.clone();
+                for &(k, v) in vars {
+                    out = out.replace(&format!("{{{}}}", k), v);
+                }
+                out
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
     }
 }
 
@@ -92,8 +172,12 @@ where
             }
             Ok(items)
         }
-        fn visit_none<E: de::Error>(self) -> Result<Vec<String>, E> { Ok(Vec::new()) }
-        fn visit_unit<E: de::Error>(self) -> Result<Vec<String>, E> { Ok(Vec::new()) }
+        fn visit_none<E: de::Error>(self) -> Result<Vec<String>, E> {
+            Ok(Vec::new())
+        }
+        fn visit_unit<E: de::Error>(self) -> Result<Vec<String>, E> {
+            Ok(Vec::new())
+        }
     }
     deserializer.deserialize_any(MultiLineVisitor)
 }
@@ -653,7 +737,6 @@ pub struct DisplayConfig {
     pub nerd_fonts: bool,
     pub show_command_summary: bool,
     pub command_summary_format: MultiLineText,
-
 }
 
 impl Default for DisplayConfig {
@@ -679,8 +762,9 @@ impl Default for DisplayConfig {
             powerline_symbols: false,
             nerd_fonts: false,
             show_command_summary: false,
-            command_summary_format: MultiLineText::from("[{status_char}] {command} (exit {exit_code})"),
-
+            command_summary_format: MultiLineText::from(
+                "[{status_char}] {command} (exit {exit_code})",
+            ),
         }
     }
 }
@@ -735,7 +819,9 @@ impl Default for EnvironmentConfig {
     }
 }
 
-fn default_branding_version() -> String { env!("CARGO_PKG_VERSION").into() }
+fn default_branding_version() -> String {
+    env!("CARGO_PKG_VERSION").into()
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]

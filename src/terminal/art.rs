@@ -1,25 +1,25 @@
-use std::io::Write;
+use super::prompt::{expand_prompt_vars, resolve_border_chars};
 use crate::config::Config;
 use crate::shell::env::Env;
 use crate::terminal::color::*;
-use super::prompt::{resolve_border_chars, expand_prompt_vars};
+use std::io::Write;
 
 fn expand_tilde(path: &str) -> String {
     if path == "~"
-        && let Ok(home) = std::env::var("HOME") {
-            return home;
-        }
+        && let Ok(home) = std::env::var("HOME")
+    {
+        return home;
+    }
     if path.starts_with("~/")
-        && let Ok(home) = std::env::var("HOME") {
-            return format!("{}{}", home, &path[1..]);
-        }
+        && let Ok(home) = std::env::var("HOME")
+    {
+        return format!("{}{}", home, &path[1..]);
+    }
     path.to_string()
 }
 
 fn has_content(cfg: &Config) -> bool {
-    !cfg.ascii.lines.is_empty()
-        || !cfg.ascii.file.is_empty()
-        || !cfg.ascii.blocks.is_empty()
+    !cfg.ascii.lines.is_empty() || !cfg.ascii.file.is_empty() || !cfg.ascii.blocks.is_empty()
 }
 
 pub fn render_ascii_art(cfg: &Config) -> String {
@@ -34,7 +34,8 @@ pub fn render_ascii_art(cfg: &Config) -> String {
         match std::fs::read_to_string(&expanded) {
             Ok(content) => content,
             Err(_) => {
-                return format!("{}{}[ascii art not found: {}]{}",
+                return format!(
+                    "{}{}[ascii art not found: {}]{}",
                     hex_to_ansi(&cfg.colors.dim),
                     italic(),
                     cfg.ascii.file,
@@ -65,7 +66,9 @@ pub fn render_ascii_art(cfg: &Config) -> String {
         let color = if let Some(ref c) = color_override {
             c.clone()
         } else if has_block_colors {
-            cfg.ascii.blocks.get(i)
+            cfg.ascii
+                .blocks
+                .get(i)
                 .map(|b| hex_to_ansi(&b.color))
                 .unwrap_or_else(|| hex_to_ansi(&cfg.ascii.box_color))
         } else if cfg.ascii.box_color.is_empty() {
@@ -77,8 +80,18 @@ pub fn render_ascii_art(cfg: &Config) -> String {
         if cfg.ascii.center {
             let width = get_terminal_width();
             let line_len = visible_len(line);
-            let padding = if width > line_len { (width - line_len) / 2 } else { 0 };
-            result.push_str(&format!("{}{}{}{}", " ".repeat(padding), color, line, reset()));
+            let padding = if width > line_len {
+                (width - line_len) / 2
+            } else {
+                0
+            };
+            result.push_str(&format!(
+                "{}{}{}{}",
+                " ".repeat(padding),
+                color,
+                line,
+                reset()
+            ));
         } else {
             let margin_left = " ".repeat(cfg.ascii.margin_left as usize);
             result.push_str(&format!("{}{}{}{}", margin_left, color, line, reset()));
@@ -117,9 +130,14 @@ pub fn render_welcome(cfg: &Config, env: &Env) -> String {
                 let line_vis = visible_len(line);
                 let inner = width.saturating_sub(2);
                 let pad_right = inner.saturating_sub(line_vis);
-                result.push_str(&format!("{}{}{}{}{}{}{}",
-                    border_color, border.vertical, reset(),
-                    content_color, line, reset(),
+                result.push_str(&format!(
+                    "{}{}{}{}{}{}{}",
+                    border_color,
+                    border.vertical,
+                    reset(),
+                    content_color,
+                    line,
+                    reset(),
                     " ".repeat(pad_right),
                 ));
                 result.push_str(&format!("{}{}{}", border_color, border.vertical, reset()));
@@ -139,7 +157,12 @@ pub fn render_welcome(cfg: &Config, env: &Env) -> String {
         let name_color = hex_to_ansi(&cfg.colors.primary);
         let tag_color = hex_to_ansi(&cfg.colors.dim);
         if !cfg.branding.app_name.is_empty() {
-            result.push_str(&format!("{}{}{}", name_color, cfg.branding.app_name, reset()));
+            result.push_str(&format!(
+                "{}{}{}",
+                name_color,
+                cfg.branding.app_name,
+                reset()
+            ));
         }
         if !cfg.branding.tagline.is_empty() {
             if !cfg.branding.app_name.is_empty() {
@@ -161,18 +184,34 @@ pub fn render_welcome(cfg: &Config, env: &Env) -> String {
     }
 
     if cfg.branding.show_version_on_start {
-        result.push_str(&format!("{}{}v{}{}", hex_to_ansi(&cfg.colors.dim), italic(), cfg.branding.version, reset()));
+        result.push_str(&format!(
+            "{}{}v{}{}",
+            hex_to_ansi(&cfg.colors.dim),
+            italic(),
+            cfg.branding.version,
+            reset()
+        ));
         result.push('\n');
     }
 
     if cfg.branding.show_config_path_on_start {
         let config_path = crate::config::loader::config_path();
-        result.push_str(&format!("{}config: {}{}", hex_to_ansi(&cfg.colors.dim), config_path.display(), reset()));
+        result.push_str(&format!(
+            "{}config: {}{}",
+            hex_to_ansi(&cfg.colors.dim),
+            config_path.display(),
+            reset()
+        ));
         result.push('\n');
     }
 
     if !cfg.branding.author.is_empty() {
-        result.push_str(&format!("{}by {}{}", hex_to_ansi(&cfg.colors.dim), cfg.branding.author, reset()));
+        result.push_str(&format!(
+            "{}by {}{}",
+            hex_to_ansi(&cfg.colors.dim),
+            cfg.branding.author,
+            reset()
+        ));
         result.push('\n');
     }
 
@@ -270,7 +309,9 @@ fn render_frame(cfg: &Config, content: &str) -> String {
         let color = if let Some(ref c) = color_override {
             c.clone()
         } else if has_block_colors {
-            cfg.ascii.blocks.get(i)
+            cfg.ascii
+                .blocks
+                .get(i)
                 .map(|b| hex_to_ansi(&b.color))
                 .unwrap_or_else(|| hex_to_ansi(&cfg.ascii.box_color))
         } else if cfg.ascii.box_color.is_empty() {
@@ -282,8 +323,18 @@ fn render_frame(cfg: &Config, content: &str) -> String {
         if cfg.ascii.center {
             let width = get_terminal_width();
             let line_len = visible_len(line);
-            let padding = if width > line_len { (width - line_len) / 2 } else { 0 };
-            result.push_str(&format!("{}{}{}{}", " ".repeat(padding), color, line, reset()));
+            let padding = if width > line_len {
+                (width - line_len) / 2
+            } else {
+                0
+            };
+            result.push_str(&format!(
+                "{}{}{}{}",
+                " ".repeat(padding),
+                color,
+                line,
+                reset()
+            ));
         } else {
             let margin_left = " ".repeat(cfg.ascii.margin_left as usize);
             result.push_str(&format!("{}{}{}{}", margin_left, color, line, reset()));

@@ -32,12 +32,17 @@ pub enum ColorCapability {
 
 pub fn detect_color_capability() -> ColorCapability {
     if let Ok(ct) = std::env::var("COLORTERM")
-        && (ct == "truecolor" || ct == "24bit") {
-            return ColorCapability::TrueColor;
-        }
+        && (ct == "truecolor" || ct == "24bit")
+    {
+        return ColorCapability::TrueColor;
+    }
     if let Ok(term) = std::env::var("TERM") {
-        if term.contains("256color") { return ColorCapability::Color256; }
-        if term == "dumb" || term.is_empty() { return ColorCapability::NoColor; }
+        if term.contains("256color") {
+            return ColorCapability::Color256;
+        }
+        if term == "dumb" || term.is_empty() {
+            return ColorCapability::NoColor;
+        }
         return ColorCapability::Color16;
     }
     ColorCapability::Color16
@@ -69,9 +74,15 @@ fn hex_to_ansi_16(hex: &str) -> String {
     let b = u8::from_str_radix(&hex[4..6], 16).unwrap_or(0);
 
     let mut idx = 30;
-    if r > 128 { idx += 1; }
-    if g > 128 { idx += 2; }
-    if b > 128 { idx += 4; }
+    if r > 128 {
+        idx += 1;
+    }
+    if g > 128 {
+        idx += 2;
+    }
+    if b > 128 {
+        idx += 4;
+    }
     if idx == 30 && (r > 30 || g > 30 || b > 30) {
         idx = 37;
     }
@@ -130,9 +141,15 @@ pub fn hex_to_ansi_bg(hex: &str) -> String {
         2 => {
             let (r, g, b) = parse_hex_rgb(hex);
             let mut idx = 40;
-            if r > 128 { idx += 1; }
-            if g > 128 { idx += 2; }
-            if b > 128 { idx += 4; }
+            if r > 128 {
+                idx += 1;
+            }
+            if g > 128 {
+                idx += 2;
+            }
+            if b > 128 {
+                idx += 4;
+            }
             if idx == 40 && (r > 30 || g > 30 || b > 30) {
                 idx = 47;
             }
@@ -160,9 +177,15 @@ pub fn gradient_color(start_hex: &str, end_hex: &str, t: f64) -> String {
         }
         2 => {
             let mut idx = 30;
-            if r > 128 { idx += 1; }
-            if g > 128 { idx += 2; }
-            if b > 128 { idx += 4; }
+            if r > 128 {
+                idx += 1;
+            }
+            if g > 128 {
+                idx += 2;
+            }
+            if b > 128 {
+                idx += 4;
+            }
             if idx == 30 && (r > 30 || g > 30 || b > 30) {
                 idx = 37;
             }
@@ -186,35 +209,56 @@ pub fn reset() -> &'static str {
 }
 
 pub fn set_terminal_bg(hex: &str) {
-    if hex.is_empty() { return; }
+    if hex.is_empty() {
+        return;
+    }
     let hex = hex.trim_start_matches('#');
-    if hex.len() != 6 { return; }
+    if hex.len() != 6 {
+        return;
+    }
     let r = u8::from_str_radix(&hex[0..2], 16).unwrap_or(0);
     let g = u8::from_str_radix(&hex[2..4], 16).unwrap_or(0);
     let b = u8::from_str_radix(&hex[4..6], 16).unwrap_or(0);
-    print!("\x1b]11;rgb:{:02x}{:02x}/{:02x}{:02x}/{:02x}{:02x}\x07", r, r, g, g, b, b);
+    print!(
+        "\x1b]11;rgb:{:02x}{:02x}/{:02x}{:02x}/{:02x}{:02x}\x07",
+        r, r, g, g, b, b
+    );
     let _ = std::io::Write::flush(&mut std::io::stdout());
 }
 
 pub fn set_terminal_fg(hex: &str) {
-    if hex.is_empty() { return; }
+    if hex.is_empty() {
+        return;
+    }
     let hex = hex.trim_start_matches('#');
-    if hex.len() != 6 { return; }
+    if hex.len() != 6 {
+        return;
+    }
     let r = u8::from_str_radix(&hex[0..2], 16).unwrap_or(0);
     let g = u8::from_str_radix(&hex[2..4], 16).unwrap_or(0);
     let b = u8::from_str_radix(&hex[4..6], 16).unwrap_or(0);
-    print!("\x1b]10;rgb:{:02x}{:02x}/{:02x}{:02x}/{:02x}{:02x}\x07", r, r, g, g, b, b);
+    print!(
+        "\x1b]10;rgb:{:02x}{:02x}/{:02x}{:02x}/{:02x}{:02x}\x07",
+        r, r, g, g, b, b
+    );
     let _ = std::io::Write::flush(&mut std::io::stdout());
 }
 
 pub fn set_terminal_cursor_color(hex: &str) {
-    if hex.is_empty() { return; }
+    if hex.is_empty() {
+        return;
+    }
     let hex = hex.trim_start_matches('#');
-    if hex.len() != 6 { return; }
+    if hex.len() != 6 {
+        return;
+    }
     let r = u8::from_str_radix(&hex[0..2], 16).unwrap_or(0);
     let g = u8::from_str_radix(&hex[2..4], 16).unwrap_or(0);
     let b = u8::from_str_radix(&hex[4..6], 16).unwrap_or(0);
-    print!("\x1b]12;rgb:{:02x}{:02x}/{:02x}{:02x}/{:02x}{:02x}\x07", r, r, g, g, b, b);
+    print!(
+        "\x1b]12;rgb:{:02x}{:02x}/{:02x}{:02x}/{:02x}{:02x}\x07",
+        r, r, g, g, b, b
+    );
     let _ = std::io::Write::flush(&mut std::io::stdout());
 }
 
@@ -234,7 +278,9 @@ pub fn strip_ansi(s: &str) -> String {
             if let Some(next) = chars.next() {
                 if next == '[' {
                     for c in chars.by_ref() {
-                        if c.is_ascii_alphabetic() { break; }
+                        if c.is_ascii_alphabetic() {
+                            break;
+                        }
                     }
                 } else if next == ']' {
                     let mut prev = ']';
@@ -273,13 +319,19 @@ pub fn visible_len(text: &str) -> usize {
             if let Some(next) = chars.next() {
                 if next == '[' {
                     for c in chars.by_ref() {
-                        if c.is_ascii_alphabetic() { break; }
+                        if c.is_ascii_alphabetic() {
+                            break;
+                        }
                     }
                 } else if next == ']' {
                     let mut prev = ']';
                     for c in chars.by_ref() {
-                        if c == '\x07' { break; }
-                        if prev == '\x1b' && c == '\\' { break; }
+                        if c == '\x07' {
+                            break;
+                        }
+                        if prev == '\x1b' && c == '\\' {
+                            break;
+                        }
                         prev = c;
                     }
                 }
@@ -353,7 +405,13 @@ mod tests {
     #[test]
     fn test_detect_color_capability() {
         let cap = detect_color_capability();
-        assert!(matches!(cap, ColorCapability::TrueColor | ColorCapability::Color256 | ColorCapability::Color16 | ColorCapability::NoColor));
+        assert!(matches!(
+            cap,
+            ColorCapability::TrueColor
+                | ColorCapability::Color256
+                | ColorCapability::Color16
+                | ColorCapability::NoColor
+        ));
     }
 
     #[test]
