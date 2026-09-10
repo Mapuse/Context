@@ -262,41 +262,41 @@ cargo check --features python
 
 All build systems auto-detect `x86_64`/`aarch64` and select the correct musl target. Cross-compilation files are in `env.mk`, `toolchain.cmake`, and `cross.txt` (generated via `scripts/crossgen.sh`).
 
-Context installs the binary to `/bin/ctx` (not `/system/bin/`).
+The Makefile `install` target places the binary at `$DESTDIR/bin/ctx` (the bin destination omits `$PREFIX`), while man pages go to `$DESTDIR$PREFIX/share/man/man1`. For a `/system` prefix, the production tree expects `$DESTDIR$PREFIX/bin/ctx` — so either manually stage the binary after `make install`, or use the Cargo `install` commands below which place it at the correct path.
 
 ### Cargo (direct)
 
 ```shell
-# Native
+TRIPLE=x86_64-unknown-linux-musl     # or aarch64-unknown-linux-musl
+PREFIX=/system
+DESTDIR=                             # empty = install into $PREFIX
+
+# Native (amd64)
 cargo build --release --locked
-install -Dm755 target/release/ctx /bin/ctx
+install -Dm755 target/release/ctx $DESTDIR$PREFIX/bin/ctx
 
-# amd64
-cargo build --release --locked --target x86_64-unknown-linux-musl
-install -Dm755 target/x86_64-unknown-linux-musl/release/ctx /bin/ctx
-
-# arm64
+# Cross-compile (e.g. arm64 from amd64)
 cargo build --release --locked --target aarch64-unknown-linux-musl
-install -Dm755 target/aarch64-unknown-linux-musl/release/ctx /bin/ctx
+install -Dm755 target/aarch64-unknown-linux-musl/release/ctx $DESTDIR$PREFIX/bin/ctx
 ```
 
 ### Make
 
 ```shell
+TRIPLE=x86_64-unknown-linux-musl     # or aarch64-unknown-linux-musl
+PREFIX=/system
+DESTDIR=
+
 # Native (auto-detects arch)
 make build
-make install
+make install DESTDIR=$DESTDIR PREFIX=$PREFIX
 
-# amd64
-make build RUST_TARGET=x86_64-unknown-linux-musl
-make install RUST_TARGET=x86_64-unknown-linux-musl
-
-# arm64
+# Cross-compile (e.g. arm64 from amd64)
 make build RUST_TARGET=aarch64-unknown-linux-musl
-make install RUST_TARGET=aarch64-unknown-linux-musl
+make install RUST_TARGET=aarch64-unknown-linux-musl DESTDIR=$DESTDIR PREFIX=$PREFIX
 
 # Staged install
-make install DESTDIR=/mnt
+make install DESTDIR=/mnt PREFIX=$PREFIX
 ```
 
 ### Meson
@@ -402,11 +402,50 @@ cargo test -- test_name
 cargo test --release --all-features
 ```
 
+### Two-target gate
+
+Before pushing, verify both architectures pass. amd64 runs natively; aarch64 cross-tests run the compiled binaries through qemu-user (binfmt).
+
+```shell
+TRIPLE=x86_64-unknown-linux-musl     # or aarch64-unknown-linux-musl
+PREFIX=/system
+DESTDIR=
+```
+
+**amd64 (native, matches CI `ubuntu-latest` leg):**
+
+```shell
+cargo fmt --check
+cargo clippy --all-targets -- -D warnings
+cargo build --locked
+cargo test --locked
+```
+
+**aarch64 cross (from an amd64 host):**
+
+```shell
+export CC_aarch64_unknown_linux_musl=$PWD/toolchains/zig-aarch64-musl-cc
+export AR_aarch64_unknown_linux_musl=/usr/bin/ar
+cargo test --locked --target aarch64-unknown-linux-musl
+```
+
+The test binaries execute through qemu-user/binfmt on an amd64 host. CI runs the same leg natively on `ubuntu-24.04-arm`.
+
+**amd64 cross (from an arm64 host):**
+
+```shell
+export CC_x86_64_unknown_linux_musl=$PWD/toolchains/zig-x86_64-musl-cc
+export AR_x86_64_unknown_linux_musl=/usr/bin/ar
+cargo test --locked --target x86_64-unknown-linux-musl
+```
+
+The x86_64 test binaries execute through qemu-user/binfmt on an arm64 host. CI runs the same leg natively on `ubuntu-latest`.
+
 ## Linting
 
 ```shell
 # Clippy (lint checks)
-cargo clippy -- -D warnings
+cargo clippy --all-targets -- -D warnings
 
 # Format check
 cargo fmt --check
@@ -463,26 +502,31 @@ perf stat -e cycles,instructions,cache-misses,faults ./target/release/ctx
 ## Continuous integration
 
 ```yaml
-# Expected CI pipeline (GitHub Actions)
+# Actual CI pipeline (GitHub Actions — .github/workflows/rust.yml)
+strategy:
+  matrix:
+    include:
+      - arch: amd64
+        os: ubuntu-latest
+      - arch: arm64
+        os: ubuntu-24.04-arm
+
+runs-on: ${{ matrix.os }}
+
 steps:
-  - name: Checkout
-    run: git checkout ${{ github.ref }}
+  - name: Install dependencies
+    run: |
+      sudo apt-get update
+      sudo apt-get install -y meson ninja-build
 
   - name: Build
-    run: cargo build --release
+    run: cargo build --verbose
 
   - name: Test
-    run: cargo test --release
-
-  - name: Lint
-    run: cargo clippy -- -D warnings
-
-  - name: Format
-    run: cargo fmt --check
-
-  - name: Audit
-    run: cargo audit
+    run: cargo test --verbose
 ```
+
+Each leg runs natively on its runner — no cross-compilation or qemu in CI.
 
 ## Cargo.toml release profile
 
